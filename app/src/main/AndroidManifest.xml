@@ -34,6 +34,16 @@
             </intent-filter>
         </activity>
 
+        <!-- P1-2: full-screen urgent-low alarm, shown over the lock screen. -->
+        <activity
+            android:name=".ui.AlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=".alarm" />
+
         <service
             android:name=".engine.MonitorService"
             android:exported="false"

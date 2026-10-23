@@ -16,6 +16,7 @@ import android.os.VibratorManager
 import com.mm.smartcgm.R
 import com.mm.smartcgm.core.Alert
 import com.mm.smartcgm.core.AlertType
+import com.mm.smartcgm.ui.AlarmActivity
 import com.mm.smartcgm.ui.MainActivity
 
 object Alarms {
@@ -58,6 +59,12 @@ object Alarms {
         Intent(ctx, SnoozeReceiver::class.java).putExtra("type", type.name).putExtra("ack", true),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
+    /** Urgent low opens the dedicated red alarm screen; other critical alerts open the app. */
+    private fun fullScreen(ctx: Context, a: Alert): PendingIntent =
+        if (a.type == AlertType.URGENT_LOW) PendingIntent.getActivity(ctx, 7000,
+            AlarmActivity.intent(ctx, a.title, a.body), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        else openApp(ctx)
+
     fun show(ctx: Context, a: Alert) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         val n = Notification.Builder(ctx, if (a.critical) CH_CRITICAL else CH_NORMAL)
@@ -77,7 +84,7 @@ object Alarms {
                 .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 30 د", snoozeIntent(ctx, a.type, 30)).build())
         }
         if (a.critical) n.setDeleteIntent(ackIntent(ctx, a.type))
-        if (a.critical) n.setFullScreenIntent(openApp(ctx), true)
+        if (a.critical) n.setFullScreenIntent(fullScreen(ctx, a), true)
         runCatching { nm.notify(1000 + a.type.ordinal, n.build()) }
         if (a.critical) playCritical(ctx)
     }
