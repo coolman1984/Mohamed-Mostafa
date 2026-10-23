@@ -31,6 +31,14 @@ private fun ingestAsync(r: GlucoseReading) {
     Pipeline.scope.launch { Repo.ingest(r) }
 }
 
+/*
+ * Contract verified against the Juggluco source (github.com/j-kaltes/Juggluco, Common/src/main/java/tk/glucodata):
+ *  - JugglucoSend.java: action "glucodata.Minute", extras SerialNumber (String), mgdl (int), glucose (float, in the
+ *    user's display unit), Rate (float), Alarm (int), Time (long, epoch ms). Sent with setPackage() to every app the
+ *    user ticked in Juggluco, so the manifest receiver gets it on Android 8+ as long as our app is selected there.
+ *  - SendLikexDrip.java: action "com.eveningoutpost.dexdrip.BgEstimate", Extras.BgEstimate (double, mg/dL),
+ *    Extras.Time (long ms). No SensorId extra is sent (we get null, which is fine).
+ */
 class GlucoseBroadcastReceiver : BroadcastReceiver() {
     companion object {
         const val JUGGLUCO = "glucodata.Minute"
@@ -83,14 +91,25 @@ class CgmNotificationListener : NotificationListenerService() {
 
 /** Nightscout-compatible endpoint that Juggluco serves when "Web server" is on in its settings. */
 object JugglucoWebSource {
+    /*
+     * Verified in Juggluco net/watchserver: default port 17580 (settings.hpp defaulthttpport), entries carry
+     * "date" (epoch ms) and "sgv" (int mg/dL). If an API secret is set inside Juggluco, requests must send the
+     * header "api-secret: <sha1 hex of the secret>", otherwise Juggluco answers 403.
+     */
     const val URL_ENTRIES = "http://127.0.0.1:17580/api/v1/entries.json?count=30"
 
-    fun poll() {
+    fun sha1Hex(s: String): String =
+        java.security.MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    /** @return HTTP status (0 = not reachable) so the health card can explain what is wrong. */
+    fun poll(apiSecret: String = ""): Int {
         val c = URL(URL_ENTRIES).openConnection() as HttpURLConnection
         c.connectTimeout = 2000
         c.readTimeout = 3000
+        if (apiSecret.isNotBlank()) c.setRequestProperty("api-secret", sha1Hex(apiSecret.trim()))
         try {
-            if (c.responseCode != 200) return
+            val code = c.responseCode
+            if (code != 200) return code
             val arr = JSONArray(c.inputStream.bufferedReader().readText())
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
@@ -98,6 +117,9 @@ object JugglucoWebSource {
                 val t = o.optLong("date", 0)
                 if (sgv > 0 && t > 0) Repo.ingest(GlucoseReading(t, sgv, "juggluco-web"))
             }
+            return code
+        } catch (e: java.io.IOException) {
+            return 0
         } finally {
             c.disconnect()
         }
