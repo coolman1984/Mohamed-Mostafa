@@ -48,5 +48,22 @@ object SensorLife {
         }
     }
 
+    /** P2-5: a silence this long followed by new readings usually means a new sensor (warm-up sends nothing). */
+    const val NEW_SENSOR_GAP_MS = 2 * HOUR_MS
+
+    /**
+     * True when the gap between the previous and the new reading is > 2 h AND the current sensor is at least a day old
+     * (a fresh sensor's own warm-up gap must not trigger it). Only a *suggestion*: the user confirms before the
+     * 15/20-day clock restarts, because a phone that was off for 2 h looks the same.
+     */
+    fun newSensorSuspected(prevReadingMs: Long?, newReadingMs: Long, sensorStartMs: Long): Boolean {
+        if (prevReadingMs == null || sensorStartMs <= 0) return false
+        if (newReadingMs - prevReadingMs <= NEW_SENSOR_GAP_MS) return false
+        return newReadingMs - sensorStartMs >= DAY_MS
+    }
+
+    /** Fraction of the official 15 days still left, for the Home ring (1 = new, 0 = due). */
+    fun ringFraction(s: SensorStatus): Float = (s.daysLeftOfficial / OFFICIAL_DAYS).coerceIn(0.0, 1.0).toFloat()
+
     fun readingsAllowed(s: SensorStatus) = s.phase == SensorPhase.ACTIVE || s.phase == SensorPhase.EXTENDED
 }

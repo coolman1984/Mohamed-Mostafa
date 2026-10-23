@@ -51,6 +51,31 @@ object Stats {
         return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)
     }
 
+    /**
+     * P2-4: share of possible CGM time that has data, in %. Time is cut into 5-minute slots and a slot counts if it
+     * holds at least one reading, so 1-minute and 5-minute sensors are judged the same way.
+     * The international consensus (Battelino 2019) wants ≥ 70% over 14 days before a report is trusted.
+     */
+    fun coveragePercent(readings: List<GlucoseReading>, fromMs: Long, toMs: Long, slotMs: Long = 5 * MINUTE_MS): Double {
+        if (toMs <= fromMs) return 0.0
+        val total = ((toMs - fromMs) / slotMs).coerceAtLeast(1)
+        val filled = readings.asSequence().filter { it.timeMs in fromMs until toMs }
+            .map { (it.timeMs - fromMs) / slotMs }.toSet().size
+        return filled * 100.0 / total
+    }
+
+    const val CONSENSUS_DAYS = 14
+    const val CONSENSUS_MIN_COVERAGE = 70.0
+
+    fun meetsConsensus(coveragePct: Double, days: Int) = days >= CONSENSUS_DAYS && coveragePct >= CONSENSUS_MIN_COVERAGE
+
+    /** P2-4 daily overlays: one series per calendar day, x = minute of day (0..1439). Oldest day first. */
+    fun dailyOverlays(readings: List<GlucoseReading>, zone: ZoneId = ZoneId.systemDefault()): List<Pair<java.time.LocalDate, List<Pair<Int, Double>>>> =
+        readings.sortedBy { it.timeMs }
+            .groupBy { Instant.ofEpochMilli(it.timeMs).atZone(zone).toLocalDate() }
+            .toSortedMap()
+            .map { (d, rs) -> d to rs.map { val z = Instant.ofEpochMilli(it.timeMs).atZone(zone); (z.hour * 60 + z.minute) to it.mgdl } }
+
     fun agp(readings: List<GlucoseReading>, zone: ZoneId = ZoneId.systemDefault()): List<AgpHour> =
         readings.groupBy { Instant.ofEpochMilli(it.timeMs).atZone(zone).hour }
             .toSortedMap()

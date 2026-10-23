@@ -187,4 +187,89 @@ class CoreTest {
         val (a, _) = AlertEngine.evaluate(GlucoseReading(t0, 40.0), null, null, AlertConfig(), snoozed, t0)
         assertTrue(a.any { it.type == AlertType.URGENT_LOW })
     }
+
+    // ---- P2 additions (each number worked by hand) ----
+
+    @Test fun stickDisagreementWarnsAbove40Percent() {
+        // sensor 100: meter 145 → |45|/100 = 0.45 > 0.40 warn; meter 135 → 0.35 ok; meter 55 → 0.45 warn; exactly 140 → 0.40 not > 0.40.
+        assertTrue(Calibration.isSuspicious(100.0, 145.0))
+        assertTrue(!Calibration.isSuspicious(100.0, 135.0))
+        assertTrue(Calibration.isSuspicious(100.0, 55.0))
+        assertTrue(!Calibration.isSuspicious(100.0, 140.0))
+        assertTrue(!Calibration.isSuspicious(null, 300.0)) // no sensor value → nothing to compare
+        assertEquals(0.45, Calibration.disagreement(100.0, 145.0), 1e-9)
+    }
+
+    @Test fun logbookEventsLandInOneRow() {
+        val z = java.time.ZoneId.of("Africa/Cairo")
+        val noon = java.time.ZonedDateTime.of(2026, 10, 22, 12, 0, 0, 0, z).toInstant().toEpochMilli()
+        val ev = Logbook.events(
+            listOf(InsulinDose(noon + 10 * MINUTE_MS, 4.0)),
+            listOf(CarbEntry(noon - 5 * MINUTE_MS, 45.0)),
+            listOf(MedicationEntry(noon + 30 * MINUTE_MS, "Metformin")), // exactly +30 → belongs to 1 PM, not noon
+        )
+        val rows = Logbook.hourly(listOf(GlucoseReading(noon, 120.0)), noon, noon + HOUR_MS, zone = z, events = ev)
+        val r12 = rows.first { it.time == "12 م" }
+        val r13 = rows.first { it.time == "1 م" }
+        assertEquals("🍞 45 جم • 💉 4 وحدة", r12.events)
+        assertEquals("💊 Metformin", r13.events)
+        val csv = Logbook.toCsv(rows)
+        assertTrue(csv.contains(",120,🍞 45 جم • 💉 4 وحدة"), csv)
+        assertTrue(csv.contains("الأحداث"))
+        // A comma inside an event must be quoted so Excel keeps the columns.
+        val q = Logbook.toCsv(listOf(r12.copy(events = "a,b")))
+        assertTrue(q.contains(",\"a,b\""), q)
+    }
+
+    @Test fun coverageAndConsensus() {
+        val from = 0L
+        val day = DAY_MS
+        // One day = 288 five-minute slots. A reading every 10 min fills 144 → 50%.
+        val half = (0 until 144).map { GlucoseReading(it * 10 * MINUTE_MS, 100.0) }
+        assertEquals(50.0, Stats.coveragePercent(half, from, day), 1e-9)
+        // 1-minute data (1440 readings) fills all 288 slots → 100%, same as 5-minute data.
+        val perMinute = (0 until 1440).map { GlucoseReading(it * MINUTE_MS, 100.0) }
+        assertEquals(100.0, Stats.coveragePercent(perMinute, from, day), 1e-9)
+        // 14 days with data on 10 full days → 10/14 = 71.4% (passes); 9 days → 64.3% (fails).
+        val tenDays = (0 until 10 * 288).map { GlucoseReading(it * 5 * MINUTE_MS, 100.0) }
+        val c10 = Stats.coveragePercent(tenDays, 0, 14 * day)
+        assertEquals(1000.0 / 14, c10, 1e-9)
+        assertTrue(Stats.meetsConsensus(c10, 14))
+        val c9 = Stats.coveragePercent(tenDays.take(9 * 288), 0, 14 * day)
+        assertTrue(!Stats.meetsConsensus(c9, 14))
+        assertTrue(!Stats.meetsConsensus(100.0, 7)) // a 7-day report never meets the 14-day standard
+    }
+
+    @Test fun dailyOverlaysSplitByDay() {
+        val z = java.time.ZoneId.of("UTC")
+        val rs = listOf(GlucoseReading(0, 100.0), GlucoseReading(90 * MINUTE_MS, 110.0), GlucoseReading(DAY_MS + 60 * MINUTE_MS, 120.0))
+        val o = Stats.dailyOverlays(rs, z)
+        assertEquals(2, o.size)
+        assertEquals(listOf(0 to 100.0, 90 to 110.0), o[0].second)
+        assertEquals(listOf(60 to 120.0), o[1].second)
+    }
+
+    @Test fun newSensorByGap() {
+        val start = 1L // 0 means "no sensor registered"
+        val t = 5 * DAY_MS
+        // gap exactly 2 h → no; 2 h + 1 min → yes; sensor only 3 h old (its own warm-up) → no; no previous → no.
+        assertTrue(!SensorLife.newSensorSuspected(t - 2 * HOUR_MS, t, start))
+        assertTrue(SensorLife.newSensorSuspected(t - 2 * HOUR_MS - MINUTE_MS, t, start))
+        assertTrue(!SensorLife.newSensorSuspected(1, 3 * HOUR_MS, start))
+        assertTrue(!SensorLife.newSensorSuspected(t - 3 * HOUR_MS, t, 0)) // no sensor start known
+        assertTrue(!SensorLife.newSensorSuspected(null, t, start))
+        // Ring: day 0 → 1.0, 7.5 days → 0.5, day 16 → 0.
+        assertEquals(1.0f, SensorLife.ringFraction(SensorLife.status(0, 0)), 1e-6f)
+        assertEquals(0.5f, SensorLife.ringFraction(SensorLife.status(0, (7.5 * DAY_MS).toLong())), 1e-6f)
+        assertEquals(0f, SensorLife.ringFraction(SensorLife.status(0, 16 * DAY_MS)), 1e-6f)
+    }
+
+    @Test fun thresholdProposalLimits() {
+        assertEquals(null, ThresholdProposal(70.0, 180.0, 0).problem())
+        assertTrue(ThresholdProposal(50.0, 180.0, 0).problem() != null)   // below 60
+        assertTrue(ThresholdProposal(60.0, 180.0, 0).problem(urgentLowMgdl = 60.0) != null) // not above urgent low
+        assertTrue(ThresholdProposal(70.0, 350.0, 0).problem() != null)   // above 300
+        assertTrue(ThresholdProposal(100.0, 125.0, 0).problem() != null)  // gap 25 < 30
+        assertEquals(null, ThresholdProposal(100.0, 130.0, 0).problem())  // gap exactly 30 ok
+    }
 }

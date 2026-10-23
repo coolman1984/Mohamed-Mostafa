@@ -21,6 +21,17 @@ data class Calibration(val slope: Double = 1.0, val offset: Double = 0.0) {
 
         val IDENTITY = Calibration()
 
+        /** P2-1: warn when a finger-stick differs from the sensor by more than this fraction of the sensor value. */
+        const val WARN_DISAGREEMENT = 0.40
+
+        /** |meter − sensor| / sensor, e.g. sensor 100, meter 145 → 0.45. */
+        fun disagreement(sensorMgdl: Double, meterMgdl: Double): Double =
+            if (sensorMgdl <= 0) 0.0 else abs(meterMgdl - sensorMgdl) / sensorMgdl
+
+        /** True when the stick looks wrong (dirty finger, bad strip) or the sensor is failing: ask before saving. */
+        fun isSuspicious(sensorMgdl: Double?, meterMgdl: Double): Boolean =
+            sensorMgdl != null && disagreement(sensorMgdl, meterMgdl) > WARN_DISAGREEMENT
+
         /** Build pairs (raw sensor, meter) by matching each finger-stick to the nearest reading. */
         fun pair(readings: List<GlucoseReading>, sticks: List<Fingerstick>): List<Pair<Double, Double>> =
             sticks.mapNotNull { s ->
