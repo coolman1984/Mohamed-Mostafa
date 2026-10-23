@@ -23,7 +23,14 @@ import java.net.URLEncoder
  */
 object CloudSync {
 
-    private fun base(s: AppSettings) = "${s.firebaseUrl.trimEnd('/')}/patients/${s.accountCode}"
+    private fun base(s: AppSettings) = "${s.firebaseUrl.trimEnd('/')}/patients/${s.activeAccountCode}"
+
+    private const val PUSH_CURSOR = "cloudLastPushedMs"
+    private const val PULL_CURSOR = "cloudLastPulledKey"
+    private const val PULL_ACCOUNT = "cloudPulledAccount"
+    /** Never try to backfill more than this after a long outage. */
+    private const val MAX_BACKFILL_MS = 24 * 60 * 60_000L
+    private const val BATCH = 300
 
     private fun http(method: String, url: String, body: String? = null): String? {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -43,14 +50,25 @@ object CloudSync {
         }
     }
 
+    /**
+     * Offline queue (AGENTS.md P1-6): uploads everything newer than the last confirmed upload (persisted cursor), in
+     * batches, so a phone that was offline for hours fills the followers' curve once it is back. The cursor only moves
+     * after Firebase confirms the write.
+     */
+    @Synchronized
     fun pushLatest(s: AppSettings) {
+        if (s.firebaseUrl.isBlank()) return
         val now = System.currentTimeMillis()
-        val recent = Repo.readings(now - 15 * 60_000L)
-        if (recent.isEmpty()) return
-        val batch = JSONObject()
-        recent.forEach { batch.put(it.timeMs.toString(), Math.round(it.mgdl)) }
-        http("PATCH", "${base(s)}/readings.json", batch.toString())
-        val last = recent.last()
+        val since = maxOf(Repo.store.getLong(PUSH_CURSOR, 0) + 1, now - MAX_BACKFILL_MS)
+        val pending = Repo.readings(since)
+        if (pending.isEmpty()) return
+        for (chunk in pending.chunked(BATCH)) {
+            val batch = JSONObject()
+            chunk.forEach { batch.put(it.timeMs.toString(), Math.round(it.mgdl)) }
+            http("PATCH", "${base(s)}/readings.json", batch.toString()) ?: return // offline: retry next minute
+            Repo.store.putLong(PUSH_CURSOR, chunk.last().timeMs)
+        }
+        val last = pending.last()
         http("PUT", "${base(s)}/status.json", JSONObject()
             .put("time", last.timeMs).put("mgdl", Math.round(last.mgdl))
             .put("iob", Repo.iob(now)).put("cob", Repo.cob(now))
@@ -60,14 +78,27 @@ object CloudSync {
     /** Follower phone: copy the patient's last 24 h into the local DB. */
     fun pullAsFollower(s: AppSettings) {
         if (s.firebaseUrl.isBlank()) return
-        val q = "orderBy=" + URLEncoder.encode("\"\$key\"", "UTF-8") + "&limitToLast=1440"
+        // Incremental: after the first full day, only ask for keys newer than the newest one we already have.
+        // Keys are 13-digit epoch-ms strings, so Firebase's lexicographic key order equals time order.
+        if (Repo.store.getString(PULL_ACCOUNT) != s.activeAccountCode) {
+            Repo.store.putString(PULL_ACCOUNT, s.activeAccountCode)
+            Repo.store.putString(PULL_CURSOR, "")
+        }
+        val cursor = Repo.store.getString(PULL_CURSOR).orEmpty()
+        val order = "orderBy=" + URLEncoder.encode("\"\$key\"", "UTF-8")
+        val q = if (cursor.isEmpty()) "$order&limitToLast=1440"
+        else "$order&startAt=" + URLEncoder.encode("\"${cursor.toLong() + 1}\"", "UTF-8")
         val json = http("GET", "${base(s)}/readings.json?$q") ?: return
-        if (json == "null") return
-        val o = JSONObject(json)
         var added = false
-        o.keys().forEach { k ->
-            val t = k.toLongOrNull() ?: return@forEach
-            if (Repo.db.insertReading(GlucoseReading(t, o.getDouble(k), "cloud"))) added = true
+        if (json != "null") {
+            val o = JSONObject(json)
+            var maxKey = cursor.toLongOrNull() ?: 0L
+            o.keys().forEach { k ->
+                val t = k.toLongOrNull() ?: return@forEach
+                if (Repo.db.insertReading(GlucoseReading(t, o.getDouble(k), "cloud"))) added = true
+                if (t > maxKey) maxKey = t
+            }
+            if (maxKey > 0) Repo.store.putString(PULL_CURSOR, maxKey.toString())
         }
         http("GET", "${base(s)}/status.json")?.takeIf { it != "null" }?.let {
             val st = JSONObject(it)

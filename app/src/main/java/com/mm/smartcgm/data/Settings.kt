@@ -4,6 +4,7 @@ import android.content.Context
 import com.mm.smartcgm.core.AlertConfig
 import com.mm.smartcgm.core.AlertRule
 import com.mm.smartcgm.core.FollowerRole
+import com.mm.smartcgm.core.GlucoseUnit
 import com.mm.smartcgm.core.Pairing
 import com.mm.smartcgm.core.TherapySettings
 
@@ -18,11 +19,21 @@ data class AppSettings(
     val geminiModel: String = "gemini-2.5-flash",
     /** e.g. https://my-project-default-rtdb.firebaseio.com */
     val firebaseUrl: String = "",
+    /** The patient's OWN account code. Never overwritten when this phone follows someone else. */
     val accountCode: String = "",
+    /** The code of the patient this phone follows (follower mode only). */
+    val followAccountCode: String = "",
     val mode: AppMode = AppMode.PATIENT,
     val followRole: FollowerRole = FollowerRole.VIEWER,
     val pollJuggluco: Boolean = true,
-)
+    /** Optional Juggluco web-server API secret (only needed if the user set one inside Juggluco). */
+    val jugglucoSecret: String = "",
+    val unit: GlucoseUnit = GlucoseUnit.MGDL,
+    val setupDone: Boolean = false,
+) {
+    /** The cloud account this phone reads/writes: its own as patient, the followed one as follower. */
+    val activeAccountCode: String get() = if (mode == AppMode.FOLLOWER) followAccountCode else accountCode
+}
 
 /** Plain SharedPreferences: small, synchronous, readable from receivers. */
 class SettingsStore(ctx: Context) {
@@ -33,6 +44,11 @@ class SettingsStore(ctx: Context) {
         val t = d.therapy
         val a = d.alerts
         var code = p.getString("accountCode", "") ?: ""
+        // Migration from v0.1: follower phones stored the FOLLOWED code in accountCode. Move it, give the phone its own.
+        if (p.getString("mode", "") == AppMode.FOLLOWER.name && p.getString("followAccountCode", "").isNullOrEmpty() && code.isNotEmpty()) {
+            p.edit().putString("followAccountCode", code).putString("accountCode", "").apply()
+            code = ""
+        }
         if (code.isEmpty()) {
             code = Pairing.newAccountCode()
             p.edit().putString("accountCode", code).apply()
@@ -64,11 +80,21 @@ class SettingsStore(ctx: Context) {
             geminiModel = p.getString("geminiModel", d.geminiModel) ?: d.geminiModel,
             firebaseUrl = p.getString("firebaseUrl", "") ?: "",
             accountCode = code,
+            followAccountCode = p.getString("followAccountCode", "") ?: "",
             mode = AppMode.valueOf(p.getString("mode", d.mode.name) ?: d.mode.name),
             followRole = FollowerRole.valueOf(p.getString("followRole", d.followRole.name) ?: d.followRole.name),
             pollJuggluco = p.getBoolean("pollJuggluco", d.pollJuggluco),
+            jugglucoSecret = p.getString("jugglucoSecret", "") ?: "",
+            unit = runCatching { GlucoseUnit.valueOf(p.getString("unit", d.unit.name)!!) }.getOrDefault(d.unit),
+            setupDone = p.getBoolean("setupDone", false),
         )
     }
+
+    /** Small key/value slots for engine state (alert memory, cloud cursors) that are not user settings. */
+    fun getLong(key: String, def: Long = 0) = p.getLong(key, def)
+    fun putLong(key: String, v: Long) = p.edit().putLong(key, v).apply()
+    fun getString(key: String): String? = p.getString(key, null)
+    fun putString(key: String, v: String) = p.edit().putString(key, v).apply()
 
     fun save(s: AppSettings) {
         val t = s.therapy
@@ -87,6 +113,9 @@ class SettingsStore(ctx: Context) {
             .putString("firebaseUrl", s.firebaseUrl.trimEnd('/')).putString("accountCode", s.accountCode)
             .putString("mode", s.mode.name).putString("followRole", s.followRole.name)
             .putBoolean("pollJuggluco", s.pollJuggluco)
+            .putString("followAccountCode", s.followAccountCode)
+            .putString("jugglucoSecret", s.jugglucoSecret).putString("unit", s.unit.name)
+            .putBoolean("setupDone", s.setupDone)
             .apply()
     }
 }

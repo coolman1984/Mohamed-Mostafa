@@ -64,6 +64,8 @@ fun HomeScreen() {
         if (follower) {
             Text("👀 وضع المتابع — ${s.followRole.arabic}", Modifier.padding(12.dp), color = MaterialTheme.colorScheme.secondary)
         }
+        if (!follower && !s.setupDone) SetupWizard()
+        if (!follower) SourceHealthCard(last?.timeMs, now)
         // Big current value
         val color = last?.let { colorFor(it.mgdl, s.therapy.lowMgdl, s.therapy.highMgdl) } ?: Color.Gray
         Card(Modifier.fillMaxWidth().padding(12.dp), colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f))) {
@@ -73,10 +75,10 @@ fun HomeScreen() {
                     Text("افتح الإعدادات ← مصدر البيانات وشغّل الربط.", style = MaterialTheme.typography.bodyMedium)
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("%.0f".format(last.mgdl), fontSize = 72.sp, fontWeight = FontWeight.Bold, color = color)
+                        Text(s.unit.format(last.mgdl), fontSize = 72.sp, fontWeight = FontWeight.Bold, color = color)
                         Text(" ${arrow.symbol}", fontSize = 56.sp, color = color)
                     }
-                    Text("mg/dL • ${arrow.arabic}")
+                    Text("${s.unit.label} • ${arrow.arabic}")
                     val ago = (now - last.timeMs) / 60_000
                     Text(if (ago < 1) "🕐 دلوقتي" else "🕐 من $ago دقيقة", style = MaterialTheme.typography.bodySmall)
                 }
@@ -122,7 +124,7 @@ fun HomeScreen() {
 
     when (entry) {
         Entry.STICK -> NumberDialog("🩸 قياس وخز الإصبع (للمعايرة)", "mg/dL", { entry = null }) {
-            Repo.db.addStick(Fingerstick(t, it)); Repo.touch()
+            Repo.addStick(Fingerstick(t, it))
         }
         Entry.INSULIN -> NumberDialog("💉 جرعة أنسولين سريع", "وحدات", { entry = null }) { saveDose(it) }
         Entry.CARBS -> NumberDialog("🍞 كربوهيدرات", "جرام", { entry = null }) { saveCarbs(it) }
