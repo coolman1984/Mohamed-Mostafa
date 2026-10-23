@@ -5,7 +5,10 @@
     "patients": {
       "$code": {
         ".read": "$code.length >= 16",
-        ".write": "$code.length >= 16"
+        ".write": "$code.length >= 16",
+        "settingsRequest": {
+          ".validate": "newData.child('low').isNumber() && newData.child('low').val() >= 60 && newData.child('low').val() <= 100 && newData.child('high').isNumber() && newData.child('high').val() >= 120 && newData.child('high').val() <= 300"
+        }
       }
     }
   }

@@ -30,6 +30,8 @@ data class AppSettings(
     val jugglucoSecret: String = "",
     val unit: GlucoseUnit = GlucoseUnit.MGDL,
     val setupDone: Boolean = false,
+    /** P2-5: >0 when readings came back after a >2 h silence; Home asks "new sensor?" until answered. */
+    val newSensorSuspectMs: Long = 0,
 ) {
     /** The cloud account this phone reads/writes: its own as patient, the followed one as follower. */
     val activeAccountCode: String get() = if (mode == AppMode.FOLLOWER) followAccountCode else accountCode
@@ -87,6 +89,7 @@ class SettingsStore(ctx: Context) {
             jugglucoSecret = p.getString("jugglucoSecret", "") ?: "",
             unit = runCatching { GlucoseUnit.valueOf(p.getString("unit", d.unit.name)!!) }.getOrDefault(d.unit),
             setupDone = p.getBoolean("setupDone", false),
+            newSensorSuspectMs = p.getLong("newSensorSuspect", 0),
         )
     }
 
@@ -115,7 +118,7 @@ class SettingsStore(ctx: Context) {
             .putBoolean("pollJuggluco", s.pollJuggluco)
             .putString("followAccountCode", s.followAccountCode)
             .putString("jugglucoSecret", s.jugglucoSecret).putString("unit", s.unit.name)
-            .putBoolean("setupDone", s.setupDone)
+            .putBoolean("setupDone", s.setupDone).putLong("newSensorSuspect", s.newSensorSuspectMs)
             .apply()
     }
 }

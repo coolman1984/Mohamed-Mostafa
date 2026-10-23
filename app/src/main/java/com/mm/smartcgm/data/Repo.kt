@@ -51,7 +51,11 @@ object Repo {
         // A new sensor serial means a new sensor: restart the 15/20-day clock.
         val id = reading.sensorId
         if (!id.isNullOrBlank() && id != s.sensorId) {
-            updateSettings { it.copy(sensorId = id, sensorStartMs = reading.timeMs) }
+            updateSettings { it.copy(sensorId = id, sensorStartMs = reading.timeMs, newSensorSuspectMs = 0) }
+        } else if (s.mode == com.mm.smartcgm.data.AppMode.PATIENT &&
+            SensorLife.newSensorSuspected(db.lastReadingTime(), reading.timeMs, s.sensorStartMs)) {
+            // P2-5: no serial (notification / web sources) but a >2 h gap: ask the user, never restart the clock silently.
+            updateSettings { it.copy(newSensorSuspectMs = reading.timeMs) }
         }
         sourceSeen[sourceGroup(reading.source)] = System.currentTimeMillis()
         if (db.insertReading(reading)) {
@@ -80,6 +84,46 @@ object Repo {
         invalidateCalibration()
         touch()
     }
+
+    fun deleteStick(timeMs: Long) { db.deleteStick(timeMs); invalidateCalibration(); touch() }
+
+    /** "Undo calibration": forget the finger-sticks of the 7-day calibration window. */
+    fun undoCalibration(now: Long = System.currentTimeMillis()) {
+        db.deleteSticksSince(now - 7 * DAY_MS); invalidateCalibration(); touch()
+    }
+
+    /** Answer to the "new sensor?" question. Yes restarts the 15/20-day clock from the first reading after the gap. */
+    fun answerNewSensor(yes: Boolean) = updateSettings {
+        if (yes) it.copy(sensorStartMs = it.newSensorSuspectMs, sensorId = "", newSensorSuspectMs = 0) else it.copy(newSensorSuspectMs = 0)
+    }
+
+    // ---- P2-6: threshold proposals from an ADMIN follower, waiting for the patient's approval ----
+    private const val PROPOSAL_KEY = "pendingThresholdProposal"
+
+    fun pendingProposal(): com.mm.smartcgm.core.ThresholdProposal? =
+        store.getString(PROPOSAL_KEY)?.split(',')?.takeIf { it.size == 3 }?.let {
+            runCatching { com.mm.smartcgm.core.ThresholdProposal(it[0].toDouble(), it[1].toDouble(), it[2].toLong()) }.getOrNull()
+        }
+
+    /** Stores a proposal only if it passes the safety limits; returns false otherwise. */
+    fun receiveProposal(p: com.mm.smartcgm.core.ThresholdProposal): Boolean {
+        if (p.problem(_settings.value.alerts.urgentLowMgdl) != null) return false
+        store.putString(PROPOSAL_KEY, "${p.lowMgdl},${p.highMgdl},${p.timeMs}"); touch(); return true
+    }
+
+    /** Patient's decision. Approve re-validates, then changes only the low/high alert thresholds (never urgent low). */
+    fun decideProposal(approve: Boolean) {
+        val p = pendingProposal()
+        store.putString(PROPOSAL_KEY, "")
+        if (approve && p != null && p.problem(_settings.value.alerts.urgentLowMgdl) == null) updateSettings {
+            it.copy(alerts = it.alerts.copy(low = it.alerts.low.copy(thresholdMgdl = p.lowMgdl),
+                high = it.alerts.high.copy(thresholdMgdl = p.highMgdl)))
+        } else touch()
+    }
+
+    /** P2-2: doses, carbs and meds as logbook events. */
+    fun logEvents(fromMs: Long): List<com.mm.smartcgm.core.LogEvent> =
+        com.mm.smartcgm.core.Logbook.events(db.doses(fromMs), db.carbs(fromMs), db.meds(fromMs))
 
     fun invalidateCalibration() = synchronized(this) { calCache = null }
 

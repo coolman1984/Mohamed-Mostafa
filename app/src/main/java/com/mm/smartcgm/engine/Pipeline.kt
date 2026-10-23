@@ -49,7 +49,7 @@ object Pipeline {
                 if (s.followRole == FollowerRole.ADMIN) evaluate(ctx)
             }
         } else {
-            scope.launch { runCatching { CloudSync.pullAdminEvents(s) } }
+            scope.launch { runCatching { CloudSync.pullAdminEvents(s) }; runCatching { CloudSync.pullThresholdProposal(s) } }
             evaluate(ctx)
         }
     }

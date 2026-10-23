@@ -114,6 +114,22 @@ object CloudSync {
             .put("type", type).put("value", value).put("time", System.currentTimeMillis()).toString())
     }
 
+    /** P2-6: ADMIN follower proposes alert thresholds; the patient must approve on their phone. */
+    fun proposeThresholds(s: AppSettings, lowMgdl: Double, highMgdl: Double): Boolean =
+        http("PUT", "${base(s)}/settingsRequest.json", JSONObject()
+            .put("low", lowMgdl).put("high", highMgdl).put("time", System.currentTimeMillis()).toString()) != null
+
+    /** Patient phone: pick up a pending threshold proposal (validated), then clear it from the cloud. */
+    fun pullThresholdProposal(s: AppSettings) {
+        if (s.firebaseUrl.isBlank()) return
+        val json = http("GET", "${base(s)}/settingsRequest.json") ?: return
+        if (json == "null") return
+        val o = JSONObject(json)
+        Repo.receiveProposal(com.mm.smartcgm.core.ThresholdProposal(o.optDouble("low", 0.0), o.optDouble("high", 0.0),
+            o.optLong("time", System.currentTimeMillis())))
+        http("DELETE", "${base(s)}/settingsRequest.json")
+    }
+
     /** Patient phone: import events written by primary followers, then delete them. */
     fun pullAdminEvents(s: AppSettings) {
         if (s.firebaseUrl.isBlank()) return

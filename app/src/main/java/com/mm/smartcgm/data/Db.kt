@@ -65,6 +65,16 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /** P2-1: remove one finger-stick (wrong strip, typo). */
+    fun deleteStick(timeMs: Long) { writableDatabase.delete("sticks", "time = ?", arrayOf(timeMs.toString())) }
+
+    /** P2-1 "undo calibration": removes every finger-stick from [fromMs] on, so raw sensor values are shown again. */
+    fun deleteSticksSince(fromMs: Long) { writableDatabase.delete("sticks", "time >= ?", arrayOf(fromMs.toString())) }
+
+    fun lastReadingTime(): Long? = readableDatabase.rawQuery("SELECT MAX(time) FROM readings", null).use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+    }
+
     fun sticks(fromMs: Long): List<Fingerstick> =
         readableDatabase.rawQuery("SELECT time, mgdl FROM sticks WHERE time >= ? ORDER BY time", arrayOf(fromMs.toString())).use { c ->
             buildList { while (c.moveToNext()) add(Fingerstick(c.getLong(0), c.getDouble(1))) }
