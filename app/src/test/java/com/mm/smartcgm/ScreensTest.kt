@@ -101,12 +101,47 @@ class ScreensTest {
         assertTrue(has("مفيش قراءات وصلت"))
     }
 
-    @Test fun logbook() { shot("04-logbook") { LogbookScreen() } }
+    @Test fun logbook() {
+        shot("04-logbook") { LogbookScreen() }
+        assertTrue(has("الأحداث"))
+        assertTrue(has("💉 4 وحدة"))
+    }
     @Test fun logbookMmol() {
         Repo.updateSettings { it.copy(unit = GlucoseUnit.MMOLL) }
         shot("04b-logbook-mmol") { LogbookScreen() }
     }
-    @Test fun analytics() { shot("05-reports") { AnalyticsScreen() } }
+    @Test fun analytics() {
+        shot("05-reports") { AnalyticsScreen() }
+        assertTrue(has("البيانات المتاحة"))
+        assertTrue(has("الأيام فوق بعض"))
+        assertTrue(has("تقرير AGP"))
+    }
+    @Test fun homeWithNewSensorPromptAndProposal() {
+        Repo.updateSettings { it.copy(newSensorSuspectMs = System.currentTimeMillis() - 60_000,
+            sensorStartMs = System.currentTimeMillis() - (12.4 * 86_400_000).toLong()) }
+        Repo.receiveProposal(com.mm.smartcgm.core.ThresholdProposal(80.0, 200.0, System.currentTimeMillis()))
+        shot("08-home-new-sensor-and-proposal") { HomeScreen() }
+        assertTrue(has("ركّبت حساس جديد"))
+        assertTrue(has("بيقترح تغيير حدود"))
+        assertTrue(has("يوم"))
+    }
+
+    @Test fun settingsCalibration() {
+        val n = System.currentTimeMillis()
+        Repo.addStick(com.mm.smartcgm.core.Fingerstick(n - 30 * 60_000, 128.0))
+        Repo.addStick(com.mm.smartcgm.core.Fingerstick(n - 26 * 3_600_000L, 96.0))
+        shot("09-settings-calibration") { SettingsScreen() }
+        assertTrue(has("المعايرة بوخز الإصبع"))
+        assertTrue(has("إلغاء المعايرة"))
+    }
+
+    @Test fun followerAdminCanProposeThresholds() {
+        Repo.updateSettings { it.copy(mode = com.mm.smartcgm.data.AppMode.FOLLOWER, followAccountCode = "ABCDEFGHJKMNPQRS",
+            followRole = com.mm.smartcgm.core.FollowerRole.ADMIN) }
+        shot("11-follower-admin-propose") { SettingsScreen() }
+        assertTrue(has("اقترح حدود تنبيه"))
+    }
+
     @Test fun settings() {
         shot("06-settings") { SettingsScreen() }
         assertTrue(has("وحدة القياس"))
