@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -31,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -39,6 +42,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.mm.smartcgm.core.AlertRule
 import com.mm.smartcgm.core.DAY_MS
 import com.mm.smartcgm.core.FollowerRole
+import com.mm.smartcgm.core.GlucoseUnit
 import com.mm.smartcgm.core.Pairing
 import com.mm.smartcgm.data.AppMode
 import com.mm.smartcgm.data.Repo
@@ -52,12 +56,30 @@ private fun qr(text: String, px: Int = 400): Bitmap {
     }
 }
 
+private fun fmtNum(v: Double) = if (v % 1.0 == 0.0) "%.0f".format(java.util.Locale.US, v) else "%.1f".format(java.util.Locale.US, v)
+
+/**
+ * Commits only when the user presses Done or leaves the field, never on every keystroke (AGENTS.md §4):
+ * typing "70" no longer sets the low alarm to 7 for a moment. Zero/negative/garbage input is ignored.
+ */
 @Composable
 private fun NumField(label: String, value: Double, modifier: Modifier = Modifier, onChange: (Double) -> Unit) {
-    var t by remember { mutableStateOf(if (value % 1.0 == 0.0) "%.0f".format(value) else value.toString()) }
-    OutlinedTextField(t, { t = it; it.replace(',', '.').toDoubleOrNull()?.takeIf { v -> v > 0 }?.let(onChange) },
-        label = { Text(label) }, singleLine = true, modifier = modifier.padding(2.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+    var t by remember(value) { mutableStateOf(fmtNum(value)) }
+    var focused by remember { mutableStateOf(false) }
+    fun commit() { t.replace(',', '.').replace('٫', '.').toDoubleOrNull()?.takeIf { it > 0 && it != value }?.let(onChange) }
+    OutlinedTextField(t, { t = it },
+        label = { Text(label) }, singleLine = true,
+        modifier = modifier.padding(2.dp).onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { commit() }))
+}
+
+/** A glucose threshold shown/edited in the chosen unit but always stored in mg/dL. */
+@Composable
+private fun GlucoseField(label: String, mgdl: Double, modifier: Modifier = Modifier, onChange: (Double) -> Unit) {
+    val u = Repo.settings.collectAsState().value.unit
+    NumField("$label (${u.label})", u.fromMgdl(mgdl).let { if (u == GlucoseUnit.MGDL) Math.round(it).toDouble() else Math.round(it * 10) / 10.0 },
+        modifier) { onChange(u.toMgdl(it)) }
 }
 
 @Composable
@@ -71,7 +93,7 @@ private fun SwitchRow(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
 private fun AlertRuleEditor(title: String, rule: AlertRule, onChange: (AlertRule) -> Unit) {
     SwitchRow(title, rule.enabled) { onChange(rule.copy(enabled = it)) }
     if (!rule.enabled) return
-    NumField("الحد (mg/dL)", rule.thresholdMgdl) { onChange(rule.copy(thresholdMgdl = it)) }
+    GlucoseField("الحد", rule.thresholdMgdl) { onChange(rule.copy(thresholdMgdl = it)) }
     Text("🔁 كرر التنبيه كل:")
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         FilterChip(rule.repeatMinutes == 5, { onChange(rule.copy(repeatMinutes = 5)) }, label = { Text("5 د") })
@@ -100,6 +122,13 @@ fun SettingsScreen() {
                     open(ctx, Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + ctx.packageName)))
                 }) { Text("🔋 اشتغل في الخلفية من غير توقف") }
                 SwitchRow("سحب القراءات من سيرفر Juggluco المحلي", s.pollJuggluco) { v -> upd { it.copy(pollJuggluco = v) } }
+                if (s.pollJuggluco) {
+                    var sec by remember { mutableStateOf(s.jugglucoSecret) }
+                    OutlinedTextField(sec, { sec = it; upd { c -> c.copy(jugglucoSecret = it.trim()) } },
+                        label = { Text("كلمة سر سيرفر Juggluco (لو حاطط واحدة)") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                }
+                OutlinedButton(onClick = { upd { it.copy(setupDone = false) } }) { Text("🧭 افتح خطوات الإعداد تاني") }
             }
 
             SectionCard("🩹 الحساس") {
@@ -107,10 +136,25 @@ fun SettingsScreen() {
                      else "مش متسجل")
                 Text("بيشتغل لحد 20 يوم، ومن يوم 15 هيطلع تنبيه يومي بضرورة التغيير.")
                 Button(onClick = { upd { it.copy(sensorStartMs = System.currentTimeMillis(), sensorId = "") } }) { Text("🆕 ركبت حساس جديد دلوقتي") }
-                NumField("أو: اتركب من كام يوم؟", 0.0) { d ->
-                    upd { it.copy(sensorStartMs = System.currentTimeMillis() - (d * DAY_MS).toLong()) }
+                // Explicit confirm button: the start time is only changed when the user presses it (AGENTS.md §4).
+                var days by remember { mutableStateOf("") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(days, { days = it }, label = { Text("أو: اتركب من كام يوم؟") }, singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    val d = days.replace(',', '.').toDoubleOrNull()?.takeIf { it in 0.0..30.0 }
+                    Button(enabled = d != null, onClick = {
+                        upd { it.copy(sensorStartMs = System.currentTimeMillis() - (d!! * DAY_MS).toLong()) }; days = ""
+                    }) { Text("✔️ تأكيد") }
                 }
             }
+        }
+
+        SectionCard("📏 وحدة القياس") {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                GlucoseUnit.entries.forEach { u -> FilterChip(s.unit == u, { upd { it.copy(unit = u) } }, label = { Text(u.label) }) }
+            }
+            Text("بتتغير في كل الشاشات والتنبيهات والملفات. الحسابات جوه التطبيق دايماً بـ mg/dL.")
         }
 
         SectionCard("🔻 تنبيه الانخفاض") {
@@ -121,21 +165,24 @@ fun SettingsScreen() {
             AlertRuleEditor("تشغيل تنبيه الارتفاع", s.alerts.high) { r -> upd { it.copy(alerts = it.alerts.copy(high = r)) } }
         }
         SectionCard("🚨 الهبوط الخطير") {
-            NumField("أقل من (mg/dL) — دايماً شغال", s.alerts.urgentLowMgdl) { v -> upd { it.copy(alerts = it.alerts.copy(urgentLowMgdl = v)) } }
+            GlucoseField("أقل من — دايماً شغال", s.alerts.urgentLowMgdl) { v -> upd { it.copy(alerts = it.alerts.copy(urgentLowMgdl = v)) } }
             SwitchRow("🔊 تجاوز الصامت وعدم الإزعاج للانخفاض", s.alerts.criticalOverride) { v -> upd { it.copy(alerts = it.alerts.copy(criticalOverride = v)) } }
             OutlinedButton(onClick = { open(ctx, Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }) { Text("🔓 اسمح بتجاوز عدم الإزعاج") }
+            if (android.os.Build.VERSION.SDK_INT >= 34) OutlinedButton(onClick = {
+                open(ctx, Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + ctx.packageName)))
+            }) { Text("📱 اسمح للإنذار يفتح الشاشة كلها") }
         }
 
         if (s.mode == AppMode.PATIENT) SectionCard("💉 المعاملات الطبية (من الدكتور)") {
             val t = s.therapy
             Row { NumField("ICR جم/وحدة", t.icr, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(icr = v)) } }
                   NumField("ISF mg/وحدة", t.isf, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(isf = v)) } } }
-            Row { NumField("الهدف", t.targetMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(targetMgdl = v)) } }
+            Row { GlucoseField("الهدف", t.targetMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(targetMgdl = v)) } }
                   NumField("مدة عمل الأنسولين (س)", t.diaHours, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(diaHours = v.coerceIn(2.0, 8.0))) } } }
             Row { NumField("أقصى جرعة", t.maxBolusUnits, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(maxBolusUnits = v)) } }
                   NumField("امتصاص الكارب (س)", t.carbAbsorptionHours, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(carbAbsorptionHours = v)) } } }
-            Row { NumField("النطاق من", t.lowMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(lowMgdl = v)) } }
-                  NumField("النطاق لحد", t.highMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(highMgdl = v)) } } }
+            Row { GlucoseField("النطاق من", t.lowMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(lowMgdl = v)) } }
+                  GlucoseField("النطاق لحد", t.highMgdl, Modifier.weight(1f)) { v -> upd { it.copy(therapy = it.therapy.copy(highMgdl = v)) } } }
         }
 
         if (s.mode == AppMode.PATIENT) SectionCard("🤖 الذكاء الاصطناعي (الكاميرا)") {
@@ -181,12 +228,15 @@ private fun FamilySection(ctx: Context) {
             Button(onClick = {
                 val p = Pairing.parseInvite(code)
                 if (p == null) err = true
-                else Repo.updateSettings { it.copy(mode = AppMode.FOLLOWER, accountCode = p.first, followRole = p.second) }
+                // Keep this phone's OWN patient code; store the followed code separately (AGENTS.md P1-5).
+                else if (p.first == s.accountCode) err = true
+                else Repo.updateSettings { it.copy(mode = AppMode.FOLLOWER, followAccountCode = p.first, followRole = p.second) }
             }) { Text("🔗 انضم كمتابع") }
         } else {
-            Text("أنت متابع (${s.followRole.arabic}) لحساب ${s.accountCode.take(4)}••••")
+            Text("أنت متابع (${s.followRole.arabic}) لحساب ${s.followAccountCode.take(4)}••••")
             OutlinedButton(onClick = {
-                Repo.updateSettings { it.copy(mode = AppMode.PATIENT, accountCode = Pairing.newAccountCode()) }
+                // Going back must NOT create a new code: the patient's existing followers stay linked.
+                Repo.updateSettings { it.copy(mode = AppMode.PATIENT) }
             }) { Text("↩️ ارجع لوضع المريض") }
         }
     }
