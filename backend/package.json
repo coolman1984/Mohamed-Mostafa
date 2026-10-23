@@ -1,0 +1,9 @@
+{
+  "name": "smartcgm-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-sqlite test/*.test.js",
+    "deploy": "wrangler d1 migrations apply smartcgm-sync --remote && wrangler deploy"
+  }
+}

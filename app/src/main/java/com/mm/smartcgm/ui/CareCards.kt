@@ -92,6 +92,21 @@ fun NewSensorPrompt() {
     }
 }
 
+/** Shown when the sensor seems restarted soon after day 15 (e.g. Juggluco "Clear"). */
+@Composable
+fun ClearSuspectCard() {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
+        Column(Modifier.padding(14.dp)) {
+            Text("⛔ الحساس شكله اتعمله إعادة تشغيل بعد يوم 15", fontWeight = FontWeight.Bold, color = Color(0xFFB71C1C))
+            Text("لو استخدمت زرار Clear في Juggluco: القراءات دي ممكن تبقى غلط جداً (أقل من الحقيقة بالنص). " +
+                "ما تاخدش أنسولين ولا سكر على أساسها — اعمل وخز إصبع، وركّب حساس جديد.")
+            Text("عدّاد الحساس ما اتصفّرش: لسه محسوب من يوم التركيب الأصلي.", fontSize = 12.sp)
+            OutlinedButton(onClick = { Repo.dismissClearWarning() }) { Text("فهمت") }
+        }
+    }
+}
+
 /** P2-6 (patient side): a follower's proposal changes nothing until approved here. */
 @Composable
 fun ProposalCard(p: ThresholdProposal) {

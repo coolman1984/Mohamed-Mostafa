@@ -34,7 +34,7 @@ object Pipeline {
     fun onNewReading(ctx: Context) {
         evaluate(ctx)
         val s = Repo.settings.value
-        if (s.mode == AppMode.PATIENT && s.firebaseUrl.isNotBlank()) {
+        if (s.mode == AppMode.PATIENT && CloudSync.enabled(s)) {
             scope.launch { runCatching { CloudSync.pushLatest(s) } }
         }
     }

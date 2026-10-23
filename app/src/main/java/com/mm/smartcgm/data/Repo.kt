@@ -50,10 +50,16 @@ object Repo {
         val s = _settings.value
         // A new sensor serial means a new sensor: restart the 15/20-day clock.
         val id = reading.sensorId
-        if (!id.isNullOrBlank() && id != s.sensorId) {
+        val prev = db.lastReadingTime()
+        if (s.mode == com.mm.smartcgm.data.AppMode.PATIENT && s.clearSuspectMs == 0L && SensorLife.suspectedClear(prev,
+                reading.timeMs, s.sensorStartMs, sameSerial = id.isNullOrBlank() || id == s.sensorId)) {
+            // Possible Juggluco "Clear" after day 15: keep the OLD start (no fresh 15 days) and warn loudly.
+            updateSettings { it.copy(clearSuspectMs = reading.timeMs) }
+            if (!id.isNullOrBlank() && id != s.sensorId) updateSettings { it.copy(sensorId = id) }
+        } else if (!id.isNullOrBlank() && id != s.sensorId) {
             updateSettings { it.copy(sensorId = id, sensorStartMs = reading.timeMs, newSensorSuspectMs = 0) }
         } else if (s.mode == com.mm.smartcgm.data.AppMode.PATIENT &&
-            SensorLife.newSensorSuspected(db.lastReadingTime(), reading.timeMs, s.sensorStartMs)) {
+            SensorLife.newSensorSuspected(prev, reading.timeMs, s.sensorStartMs)) {
             // P2-5: no serial (notification / web sources) but a >2 h gap: ask the user, never restart the clock silently.
             updateSettings { it.copy(newSensorSuspectMs = reading.timeMs) }
         }
@@ -91,6 +97,9 @@ object Repo {
     fun undoCalibration(now: Long = System.currentTimeMillis()) {
         db.deleteSticksSince(now - 7 * DAY_MS); invalidateCalibration(); touch()
     }
+
+    /** User read the "possible Juggluco Clear" warning. Does NOT restart the sensor clock. */
+    fun dismissClearWarning() = updateSettings { it.copy(clearSuspectMs = 0) }
 
     /** Answer to the "new sensor?" question. Yes restarts the 15/20-day clock from the first reading after the gap. */
     fun answerNewSensor(yes: Boolean) = updateSettings {

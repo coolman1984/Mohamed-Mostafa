@@ -41,7 +41,11 @@ fun SetupWizard() {
             if (!hasJuggluco) OutlinedButton(onClick = {
                 go(ctx, Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=tk.glucodata")))
             }) { Text("⬇️ نزّل Juggluco") }
-            Text("2️⃣ افتح Juggluco وشغّل الحساس: LinX بتصوير الكود اللي على العلبة، ليبري بلمس الموبايل للحساس، سيبيونكس بالكود.")
+            Text("⭐ المصدر المُوصى بيه: Juggluco بالبلوتوث مباشرة. تطبيق LinX الرسمي بيوقف عرض القراءات حوالي يوم 10، " +
+                "لكن Juggluco بيكمّل لحد ما الحساس نفسه يقف عند يوم 15.")
+            Text("2️⃣ ربط LinX في Juggluco: اقفل تطبيق LinX (الإعدادات ← التطبيقات ← LinX ← فرض الإيقاف)، وامسح الحساس من أجهزة " +
+                "البلوتوث المقترنة لو موجود. في Juggluco: القائمة الشمال ← Photo وصوّر الكود المربع (Data Matrix) اللي على علبة الحساس، " +
+                "ووافق على طلب الاقتران. ليبري: المس الموبايل للحساس مرتين. سيبيونكس: صوّر الكود.")
             if (hasJuggluco) OutlinedButton(onClick = {
                 ctx.packageManager.getLaunchIntentForPackage("tk.glucodata")?.let { go(ctx, it) }
             }) { Text("📲 افتح Juggluco") }

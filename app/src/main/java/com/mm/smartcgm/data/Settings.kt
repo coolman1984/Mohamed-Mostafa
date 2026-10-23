@@ -17,8 +17,12 @@ data class AppSettings(
     val sensorId: String = "",
     val geminiKey: String = "",
     val geminiModel: String = "gemini-2.5-flash",
-    /** e.g. https://my-project-default-rtdb.firebaseio.com */
-    val firebaseUrl: String = "",
+    /** Family-sync backend (Cloudflare Worker in backend/). Blank turns sharing off. */
+    val backendUrl: String = DEFAULT_BACKEND_URL,
+    /** This phone's own random token as patient (owner). Never shown, never sent anywhere except the backend. */
+    val ownerToken: String = "",
+    /** Token this phone got when it redeemed a follower invite. */
+    val followToken: String = "",
     /** The patient's OWN account code. Never overwritten when this phone follows someone else. */
     val accountCode: String = "",
     /** The code of the patient this phone follows (follower mode only). */
@@ -32,7 +36,12 @@ data class AppSettings(
     val setupDone: Boolean = false,
     /** P2-5: >0 when readings came back after a >2 h silence; Home asks "new sensor?" until answered. */
     val newSensorSuspectMs: Long = 0,
+    /** >0 when the sensor looked restarted soon after day 15 (e.g. Juggluco "Clear"): readings may be badly wrong. */
+    val clearSuspectMs: Long = 0,
 ) {
+    companion object { const val DEFAULT_BACKEND_URL = "https://smartcgm-sync.mflma2040.workers.dev" }
+    /** Token for the active account: own as patient, the follower token as follower. */
+    val activeToken: String get() = if (mode == AppMode.FOLLOWER) followToken else ownerToken
     /** The cloud account this phone reads/writes: its own as patient, the followed one as follower. */
     val activeAccountCode: String get() = if (mode == AppMode.FOLLOWER) followAccountCode else accountCode
 }
@@ -50,6 +59,11 @@ class SettingsStore(ctx: Context) {
         if (p.getString("mode", "") == AppMode.FOLLOWER.name && p.getString("followAccountCode", "").isNullOrEmpty() && code.isNotEmpty()) {
             p.edit().putString("followAccountCode", code).putString("accountCode", "").apply()
             code = ""
+        }
+        var owner = p.getString("ownerToken", "") ?: ""
+        if (owner.isEmpty()) {
+            owner = Pairing.newToken()
+            p.edit().putString("ownerToken", owner).apply()
         }
         if (code.isEmpty()) {
             code = Pairing.newAccountCode()
@@ -80,7 +94,10 @@ class SettingsStore(ctx: Context) {
             sensorId = p.getString("sensorId", "") ?: "",
             geminiKey = p.getString("geminiKey", "") ?: "",
             geminiModel = p.getString("geminiModel", d.geminiModel) ?: d.geminiModel,
-            firebaseUrl = p.getString("firebaseUrl", "") ?: "",
+            // Old Firebase URLs are ignored on purpose: sharing moved to the Cloudflare backend.
+            backendUrl = p.getString("backendUrl", d.backendUrl) ?: d.backendUrl,
+            ownerToken = owner,
+            followToken = p.getString("followToken", "") ?: "",
             accountCode = code,
             followAccountCode = p.getString("followAccountCode", "") ?: "",
             mode = AppMode.valueOf(p.getString("mode", d.mode.name) ?: d.mode.name),
@@ -90,6 +107,7 @@ class SettingsStore(ctx: Context) {
             unit = runCatching { GlucoseUnit.valueOf(p.getString("unit", d.unit.name)!!) }.getOrDefault(d.unit),
             setupDone = p.getBoolean("setupDone", false),
             newSensorSuspectMs = p.getLong("newSensorSuspect", 0),
+            clearSuspectMs = p.getLong("clearSuspect", 0),
         )
     }
 
@@ -113,12 +131,14 @@ class SettingsStore(ctx: Context) {
             .putInt("stale", a.staleMinutes).putBoolean("critical", a.criticalOverride)
             .putLong("sensorStart", s.sensorStartMs).putString("sensorId", s.sensorId)
             .putString("geminiKey", s.geminiKey).putString("geminiModel", s.geminiModel)
-            .putString("firebaseUrl", s.firebaseUrl.trimEnd('/')).putString("accountCode", s.accountCode)
+            .putString("backendUrl", s.backendUrl.trimEnd('/'))
+            .putString("ownerToken", s.ownerToken).putString("followToken", s.followToken).remove("firebaseUrl").putString("accountCode", s.accountCode)
             .putString("mode", s.mode.name).putString("followRole", s.followRole.name)
             .putBoolean("pollJuggluco", s.pollJuggluco)
             .putString("followAccountCode", s.followAccountCode)
             .putString("jugglucoSecret", s.jugglucoSecret).putString("unit", s.unit.name)
             .putBoolean("setupDone", s.setupDone).putLong("newSensorSuspect", s.newSensorSuspectMs)
+            .putLong("clearSuspect", s.clearSuspectMs)
             .apply()
     }
 }

@@ -4,6 +4,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -141,9 +142,11 @@ class CoreTest {
     }
 
     @Test fun pairingRoundTrip() {
-        val acc = Pairing.newAccountCode()
-        assertEquals(acc to FollowerRole.VIEWER, Pairing.parseInvite(Pairing.inviteCode(acc, FollowerRole.VIEWER)))
+        assertEquals(16, Pairing.newAccountCode().length)
+        assertEquals("ABCDEFGH23", Pairing.parseInvite("smartcgm:abcd-efgh23"))
         assertNull(Pairing.parseInvite("bad"))
+        assertNull(Pairing.parseInvite("SMARTCGM:ABCDEFGHI0")) // 0 is not in the alphabet
+        val t = Pairing.newToken(); assertEquals(64, t.length); assertNotEquals(t, Pairing.newToken())
     }
 
     /** AGENTS.md acceptance test #8, worked by hand. ICR 10 g/u, ISF 50, target 100. */
@@ -271,5 +274,22 @@ class CoreTest {
         assertTrue(ThresholdProposal(70.0, 350.0, 0).problem() != null)   // above 300
         assertTrue(ThresholdProposal(100.0, 125.0, 0).problem() != null)  // gap 25 < 30
         assertEquals(null, ThresholdProposal(100.0, 130.0, 0).problem())  // gap exactly 30 ok
+    }
+
+    @Test fun suspectedJugglucoClear() {
+        val start = DAY_MS
+        val d15 = start + 15 * DAY_MS + HOUR_MS
+        // Same serial "restarting" after day 15 = Clear.
+        assertTrue(SensorLife.suspectedClear(d15 - 20 * MINUTE_MS, d15, start, sameSerial = true))
+        // Same serial streaming on with no pause (Libre 2 12-h grace) is not flagged.
+        assertTrue(!SensorLife.suspectedClear(d15 - MINUTE_MS, d15, start, sameSerial = true))
+        // New serial but readings came back within the 60-min warm-up: a real new sensor cannot do that.
+        assertTrue(SensorLife.suspectedClear(d15 - 10 * MINUTE_MS, d15, start, sameSerial = false))
+        // Normal replacement after day 15: >60 min silence, new serial.
+        assertTrue(!SensorLife.suspectedClear(d15 - 3 * HOUR_MS, d15, start, sameSerial = false))
+        // Before day 15 a restart is not flagged.
+        assertTrue(!SensorLife.suspectedClear(start + 10 * DAY_MS - 20 * MINUTE_MS, start + 10 * DAY_MS, start, sameSerial = true))
+        assertTrue(!SensorLife.suspectedClear(null, d15, start, sameSerial = true))
+        assertTrue(!SensorLife.suspectedClear(d15 - 20 * MINUTE_MS, d15, 0, sameSerial = true))
     }
 }

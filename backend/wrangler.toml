@@ -1,0 +1,11 @@
+# Free plan only: one Worker + one D1 database. No secrets are needed (per-device tokens are created at runtime).
+name = "smartcgm-sync"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "smartcgm-sync"
+database_id = "90819797-0426-455f-82f7-c3ad16737191"
+migrations_dir = "migrations"

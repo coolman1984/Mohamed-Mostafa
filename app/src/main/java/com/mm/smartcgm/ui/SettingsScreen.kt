@@ -37,6 +37,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.MaterialTheme
+import com.mm.smartcgm.cloud.CloudSync
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.mm.smartcgm.core.AlertRule
@@ -134,8 +141,11 @@ fun SettingsScreen() {
             SectionCard("🩹 الحساس") {
                 Text(if (s.sensorStartMs > 0) "اتركب من %.1f يوم • %s".format((System.currentTimeMillis() - s.sensorStartMs) / DAY_MS.toDouble(), s.sensorId)
                      else "مش متسجل")
-                Text("بيشتغل لحد 20 يوم، ومن يوم 15 هيطلع تنبيه يومي بضرورة التغيير.")
-                Button(onClick = { upd { it.copy(sensorStartMs = System.currentTimeMillis(), sensorId = "") } }) { Text("🆕 ركبت حساس جديد دلوقتي") }
+                Text("التطبيق بيعرض القراءات لحد يوم 20، ومن يوم 15 هيطلع تنبيه يومي بضرورة التغيير.")
+                Text("⚠️ حساس LinX نفسه بيبطّل يبعت لوحده عند 15 يوم بالظبط، فأيام 16–20 غالباً مش هيبقى فيها قراءات. " +
+                    "تطبيق LinX الرسمي بيوقف العرض بدري (حوالي يوم 10) — استخدم Juggluco عشان القراءات تكمّل لحد يوم 15. " +
+                    "ما تستخدمش زرار Clear في Juggluco: القراءات بعده بتطلع غلط.", fontSize = 12.sp)
+                Button(onClick = { upd { it.copy(sensorStartMs = System.currentTimeMillis(), sensorId = "", clearSuspectMs = 0) } }) { Text("🆕 ركبت حساس جديد دلوقتي") }
                 // Explicit confirm button: the start time is only changed when the user presses it (AGENTS.md §4).
                 var days by remember { mutableStateOf("") }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -205,36 +215,49 @@ fun SettingsScreen() {
 @Composable
 private fun FamilySection(ctx: Context) {
     val s by Repo.settings.collectAsState()
+    val scope = rememberCoroutineScope()
     SectionCard("👨‍👩‍👧 مشاركة الأهل والمتابعة") {
-        var url by remember { mutableStateOf(s.firebaseUrl) }
-        OutlinedTextField(url, { url = it; Repo.updateSettings { c -> c.copy(firebaseUrl = it.trim()) } },
-            label = { Text("رابط قاعدة Firebase") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text("المشاركة شغالة على سيرفر Cloudflare مجاني. كل موبايل ليه مفتاح سري خاص بيه.", fontSize = 12.sp)
         if (s.mode == AppMode.PATIENT) {
-            if (s.firebaseUrl.isBlank()) { Text("حط الرابط الأول عشان تقدر تضيف متابعين."); return@SectionCard }
             var role by remember { mutableStateOf(FollowerRole.ADMIN) }
+            var invite by remember { mutableStateOf<String?>(null) }
+            var busy by remember { mutableStateOf(false) }
+            var failed by remember { mutableStateOf(false) }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FollowerRole.entries.forEach { r -> FilterChip(role == r, { role = r }, label = { Text(r.arabic) }) }
+                FollowerRole.entries.forEach { r -> FilterChip(role == r, { role = r; invite = null }, label = { Text(r.arabic) }) }
             }
             Text(if (role.receivesCritical) "🚨 بيستقبل إنذارات الطوارئ ويقدر يسجل جرعات وأكل." else "👀 بيشوف بس من غير إنذارات ولا تعديل.")
-            val invite = "SMARTCGM:" + Pairing.inviteCode(s.accountCode, role)
-            val bmp = remember(invite) { qr(invite) }
-            Image(bmp.asImageBitmap(), null, Modifier.size(200.dp))
-            Text("الكود: ${invite.removePrefix("SMARTCGM:")}")
-            OutlinedButton(onClick = {
-                open(ctx, Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,
-                    "كود متابعة السكر: ${invite.removePrefix("SMARTCGM:")}\nرابط القاعدة: ${s.firebaseUrl}"), "ابعت الكود"))
-            }) { Text("📤 ابعت الكود") }
+            Button(enabled = !busy, onClick = {
+                busy = true; failed = false
+                scope.launch {
+                    val c = withContext(Dispatchers.IO) { runCatching { CloudSync.createInvite(s, role) }.getOrNull() }
+                    invite = c; failed = c == null; busy = false
+                }
+            }) { Text(if (busy) "⏳ ..." else "🎟️ اعمل كود متابعة") }
+            if (failed) Text("مفيش نت أو السيرفر مش متاح — جرّب تاني.", color = MaterialTheme.colorScheme.error)
+            invite?.let { code ->
+                val bmp = remember(code) { qr("SMARTCGM:$code") }
+                Image(bmp.asImageBitmap(), null, Modifier.size(200.dp))
+                Text("الكود: $code  (يستخدم مرة واحدة، صالح 24 ساعة)")
+                OutlinedButton(onClick = {
+                    open(ctx, Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "كود متابعة السكر (صالح 24 ساعة): $code"), "ابعت الكود"))
+                }) { Text("📤 ابعت الكود") }
+            }
             Text("— أو —")
             var code by remember { mutableStateOf("") }
             var err by remember { mutableStateOf(false) }
             OutlinedTextField(code, { code = it; err = false }, label = { Text("انضم كمتابع: اكتب كود المريض") }, singleLine = true, isError = err)
-            Button(onClick = {
-                val p = Pairing.parseInvite(code)
-                if (p == null) err = true
-                // Keep this phone's OWN patient code; store the followed code separately (AGENTS.md P1-5).
-                else if (p.first == s.accountCode) err = true
-                else Repo.updateSettings { it.copy(mode = AppMode.FOLLOWER, followAccountCode = p.first, followRole = p.second) }
+            Button(enabled = !busy, onClick = {
+                val c = Pairing.parseInvite(code)
+                if (c == null) err = true
+                else { busy = true; scope.launch {
+                    // Keeps this phone's OWN patient code and token; the follower token is stored separately (P1-5).
+                    err = !withContext(Dispatchers.IO) { runCatching { CloudSync.redeemInvite(s, c) }.getOrDefault(false) }
+                    busy = false
+                } }
             }) { Text("🔗 انضم كمتابع") }
+            if (err) Text("الكود غلط أو انتهى أو مستخدم قبل كده.", color = MaterialTheme.colorScheme.error)
         } else {
             Text("أنت متابع (${s.followRole.arabic}) لحساب ${s.followAccountCode.take(4)}••••")
             OutlinedButton(onClick = {
@@ -242,5 +265,8 @@ private fun FamilySection(ctx: Context) {
                 Repo.updateSettings { it.copy(mode = AppMode.PATIENT) }
             }) { Text("↩️ ارجع لوضع المريض") }
         }
+        var url by remember { mutableStateOf(s.backendUrl) }
+        OutlinedTextField(url, { url = it; Repo.updateSettings { c -> c.copy(backendUrl = it.trim()) } },
+            label = { Text("عنوان السيرفر (متقدم)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     }
 }

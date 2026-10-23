@@ -44,7 +44,7 @@ Juggluco (free open-source app, tk.glucodata) ── decodes all 4 sensor famili
 Smart CGM (this repo) ◄───┘
    │ core/ math → alerts, logbook, reports, bolus suggestion, AI camera
    ▼
-Firebase Realtime DB (REST) ──► follower phones (parents/doctor)
+Cloudflare Worker + D1 (backend/) ──► follower phones (parents/doctor)
 ```
 
 **Why Juggluco:** the sensors' BLE protocols are proprietary and encrypted. Juggluco already
@@ -70,13 +70,13 @@ would carry clinical risk. **Do not try to write BLE decryption yourself.**
 | `app/.../data/` | `Db` (SQLite, stores RAW values), `SettingsStore` (SharedPreferences), `Repo` (single entry point: `ingest()`, calibrated `readings()`) |
 | `app/.../sources/Sources.kt` | Broadcast receiver, notification listener, Juggluco web poller |
 | `app/.../engine/` | `MonitorService` (foreground, 60 s loop), `Pipeline` (evaluate alerts, sync), `Alarms` (channels, critical sound on the alarm stream), snooze/boot receivers |
-| `app/.../cloud/CloudSync.kt` | Firebase RTDB over REST: `/patients/{code}/readings`, `/status`, `/events` |
+| `app/.../cloud/CloudSync.kt` | Cloudflare Worker client: `/v1/p/{code}/readings`, `/status`, `/events`, `/proposal`, invites; per-device bearer tokens |
 | `app/.../ai/VisionAi.kt` | Gemini `generateContent` with an image → JSON (meal carbs, or medicine OCR) |
 | `app/.../export/Exporter.kt` | CSV and A4 colored PDF, shared through FileProvider |
 | `app/.../ui/` | Compose screens, forced RTL: Home, Scanner, Logbook, Analytics, Settings |
 | `.github/workflows/android.yml` | Runs core tests, builds the release APK (debug-signed), uploads the artifact `SmartCGM-apk` |
 | `docs/RESEARCH.md` | Research summary (Arabic) with sources |
-| `docs/firebase-rules.json` | Current (weak) DB rules |
+| `backend/` | Worker (`src/worker.js`), D1 schema (`migrations/`), tests (`npm test`), `wrangler.toml` |
 
 ### Build
 - JDK 17, Gradle 8.14.3 (wrapper), AGP 8.7.3, Kotlin 2.1.0, compileSdk/targetSdk 35, minSdk 26.
@@ -141,15 +141,15 @@ Each task has a **Definition of Done (DoD)**. Do not mark a task done without me
 - DoD: the phone is on silent + DND, glucose is 50 → loud alarm repeats until tapped.
 
 **P1-3 Remote family alerts that work when the follower app is closed.**
-- Today followers poll Firebase every 60 s from their own foreground service. That works on the internet, but only while the service is alive.
-- Add Firebase Cloud Messaging so the patient's phone or a Cloud Function sends high-priority push to ADMIN followers on urgent low, predicted low, and signal lost.
+- Today followers poll the Cloudflare backend every 60 s from their own foreground service. That works on the internet, but only while the service is alive.
+- (Optional, off for now — no Firebase config in the repo) add push so the patient's phone or a Cloud Function sends high-priority push to ADMIN followers on urgent low, predicted low, and signal lost.
 - Options to present to the owner:
   - (a) Cloud Function — needs the Blaze plan, usually still free at this volume;
   - (b) the patient phone sends FCM through the HTTP v1 API — needs a service-account key on the phone, which is **insecure, do not do it**.
   - Recommend (a).
 - DoD: a follower phone that is locked and the app killed gets the alarm within 60 s.
 
-**P1-4 Secure Firebase.** The current rules make the data readable by anyone who knows the 16-char code. Replace them with:
+**P1-4 Secure sharing — DONE by moving to Cloudflare (backend/): one-time 24 h invites, per-device tokens (hash only on server), server-side roles and proposal limits, urgent-low not proposable.** Old Firebase notes, kept for history: The current rules make the data readable by anyone who knows the 16-char code. Replace them with:
 - Firebase Auth (anonymous or Google sign-in) on every phone;
 - `/patients/{code}/members/{uid} = "admin"|"viewer"|"owner"`;
 - rules where only members read, only the owner and admins write `events`, and only the owner writes `readings`/`status`;
@@ -205,7 +205,7 @@ Each task has a **Definition of Done (DoD)**. Do not mark a task done without me
 - Keep the core tests at 100% pass.
 
 **P3-4 Privacy.**
-- Health data stays on the device and in the owner's own Firebase.
+- Health data stays on the device and in the owner's own Cloudflare account (D1, readings kept 30 days).
 - Write a short Arabic privacy note in the app.
 - Keep `allowBackup=false`.
 

@@ -17,6 +17,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests (medical logic)
         run: ./gradlew -p core test --no-daemon
+      - name: App unit tests (Robolectric)
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
       - name: Build APK
         run: ./gradlew :app:assembleRelease --no-daemon
       - name: Android lint (report only for now)
@@ -32,3 +34,14 @@ jobs:
         with:
           name: SmartCGM-apk
           path: app/build/outputs/apk/release/*.apk
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Worker tests (family sync backend)
+        run: npm test
+        working-directory: backend

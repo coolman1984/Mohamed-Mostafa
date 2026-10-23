@@ -41,15 +41,15 @@ object Pairing {
     fun newAccountCode(length: Int = 16): String =
         (1..length).map { ALPHABET[rnd.nextInt(ALPHABET.length)] }.joinToString("")
 
-    /** Code a follower types (or scans as QR): account code + role letter. */
-    fun inviteCode(accountCode: String, role: FollowerRole): String =
-        "$accountCode-${if (role == FollowerRole.ADMIN) 'A' else 'V'}"
+    /** Per-device bearer token for the sync backend (256 random bits, hex). */
+    fun newToken(): String = ByteArray(32).also { rnd.nextBytes(it) }.joinToString("") { "%02x".format(it) }
 
-    fun parseInvite(code: String): Pair<String, FollowerRole>? {
-        val c = code.trim().uppercase().removePrefix("SMARTCGM:")
-        val parts = c.split('-')
-        if (parts.size != 2 || parts[0].length < 12 || parts[0].any { it !in ALPHABET }) return null
-        val role = when (parts[1]) { "A" -> FollowerRole.ADMIN; "V" -> FollowerRole.VIEWER; else -> return null }
-        return parts[0] to role
+    /**
+     * One-time invite code made by the backend (10 chars, valid 24 h), optionally prefixed "SMARTCGM:" in the QR.
+     * Returns the bare code or null.
+     */
+    fun parseInvite(code: String): String? {
+        val c = code.trim().uppercase().removePrefix("SMARTCGM:").replace(" ", "").replace("-", "")
+        return c.takeIf { it.length in 8..16 && it.all { ch -> ch in ALPHABET } }
     }
 }

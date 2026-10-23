@@ -68,6 +68,7 @@ fun HomeScreen() {
         }
         if (!follower && !s.setupDone) SetupWizard()
         if (!follower) SourceHealthCard(last?.timeMs, now)
+        if (!follower && s.clearSuspectMs > 0) ClearSuspectCard()
         if (!follower && s.newSensorSuspectMs > 0) NewSensorPrompt()
         val proposal = remember(key) { if (!follower) Repo.pendingProposal() else null }
         proposal?.let { ProposalCard(it) }
