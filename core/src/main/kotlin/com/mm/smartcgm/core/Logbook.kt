@@ -68,9 +68,12 @@ object Logbook {
     }
 
     /** CSV with BOM so Excel opens Arabic correctly. */
-    fun toCsv(rows: List<LogRow>): String = buildString {
+    fun toCsv(rows: List<LogRow>, unit: GlucoseUnit = GlucoseUnit.MGDL): String = buildString {
         append('﻿')
-        append("اليوم,التاريخ,التوقيت,نسبة السكر (mg/dL)\n")
-        rows.forEach { append("${it.dayName},${it.date},${it.time},${it.mgdl ?: ""}\n") }
+        append("اليوم,التاريخ,التوقيت,نسبة السكر (${unit.label})\n")
+        rows.forEach { append("${it.dayName},${it.date},${it.time},${value(it, unit)}\n") }
     }
+
+    /** The cell text for one row in the chosen display unit ("" when there was no reading that hour). */
+    fun value(row: LogRow, unit: GlucoseUnit): String = row.mgdl?.let { unit.format(it.toDouble()) } ?: ""
 }

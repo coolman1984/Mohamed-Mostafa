@@ -10,6 +10,7 @@ import com.mm.smartcgm.core.GlucoseStats
 import com.mm.smartcgm.core.LogRow
 import com.mm.smartcgm.core.Logbook
 import com.mm.smartcgm.core.RangeColor
+import com.mm.smartcgm.data.Repo
 import java.io.File
 
 /** One-tap export of the hourly table (Excel-compatible CSV or colored PDF) and the doctor report. */
@@ -27,7 +28,7 @@ object Exporter {
     }
 
     fun csv(ctx: Context, rows: List<LogRow>): File =
-        file(ctx, "سجل_السكر.csv").apply { writeText(Logbook.toCsv(rows), Charsets.UTF_8) }
+        file(ctx, "سجل_السكر.csv").apply { writeText(Logbook.toCsv(rows, Repo.settings.value.unit), Charsets.UTF_8) }
 
     private fun colorOf(c: RangeColor?) = when (c) {
         RangeColor.GREEN -> Color.rgb(200, 230, 201)
@@ -58,9 +59,9 @@ object Exporter {
             c.drawText(title, w / 2f, y, bold.apply { textSize = 15f }); bold.textSize = 12f
             y += 22
             if (pageNo == 1 && stats != null) {
-                c.drawText("في النطاق %.0f%%  •  تحت %.0f%%  •  فوق %.0f%%  •  المتوسط %.0f  •  GMI %.1f%%".format(
+                c.drawText("في النطاق %.0f%%  •  تحت %.0f%%  •  فوق %.0f%%  •  المتوسط %s  •  GMI %.1f%%".format(
                     stats.inRangePct, stats.lowPct + stats.veryLowPct, stats.highPct + stats.veryHighPct,
-                    stats.meanMgdl, stats.gmiPercent), w / 2f, y, text)
+                    Repo.settings.value.unit.formatWithUnit(stats.meanMgdl), stats.gmiPercent), w / 2f, y, text)
                 y += 22
             }
             cols.forEachIndexed { i, s -> c.drawText(s, colX(i) - colW / 2, y, bold) }
@@ -76,7 +77,7 @@ object Exporter {
             val c = page.canvas
             fill.color = colorOf(r.color)
             c.drawRect(40f, y, w - 40f, y + rowH, fill)
-            val vals = listOf(r.dayName, r.date, r.time, r.mgdl?.toString() ?: "—")
+            val vals = listOf(r.dayName, r.date, r.time, Logbook.value(r, Repo.settings.value.unit).ifEmpty { "—" })
             vals.forEachIndexed { i, s -> c.drawText(s, colX(i) - colW / 2, y + 13, text) }
             y += rowH
             c.drawLine(40f, y, w - 40f, y, line)

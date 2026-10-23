@@ -63,7 +63,7 @@ fun LogbookScreen() {
         LazyColumn {
             items(rows, key = { it.hourStartMs }) { r ->
                 Row(Modifier.fillMaxWidth().background(rangeColor(r.color)).padding(vertical = 6.dp)) {
-                    listOf(r.dayName, r.date, r.time, r.mgdl?.toString() ?: "—").forEach {
+                    listOf(r.dayName, r.date, r.time, Logbook.value(r, Repo.settings.value.unit).ifEmpty { "—" }).forEach {
                         Text(it, Modifier.weight(1f), textAlign = TextAlign.Center)
                     }
                 }

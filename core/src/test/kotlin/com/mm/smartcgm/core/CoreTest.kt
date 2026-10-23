@@ -122,6 +122,10 @@ class CoreTest {
         assertEquals(65, rows.last().mgdl); assertEquals(RangeColor.RED, rows.last().color)
         assertNull(rows.first().mgdl)
         assertTrue(Logbook.toCsv(rows).contains("الخميس,22/10/26,12 ص,65"))
+        // 65 / 18.0182 = 3.607 → "3.6"; header names the unit.
+        val mmol = Logbook.toCsv(rows, GlucoseUnit.MMOLL)
+        assertTrue(mmol.contains("الخميس,22/10/26,12 ص,3.6"), mmol)
+        assertTrue(mmol.contains("(mmol/L)"))
     }
 
     @Test fun notificationParsing() {

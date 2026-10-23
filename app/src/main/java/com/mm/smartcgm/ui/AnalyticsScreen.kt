@@ -54,14 +54,15 @@ fun AnalyticsScreen() {
         if (st == null) {
             Text("📭 مفيش قراءات كفاية لسه.", Modifier.padding(16.dp)); return@Column
         }
-        SectionCard("🎯 الوقت في النطاق (70–180)") {
+        val u = Repo.settings.value.unit
+        SectionCard("🎯 الوقت في النطاق (${u.format(70.0)}–${u.format(180.0)})") {
             TirBar(st.veryLowPct, st.lowPct, st.inRangePct, st.highPct, st.veryHighPct)
             Text("🟢 في النطاق: %.0f%%  (الهدف أكتر من 70%%)".format(st.inRangePct), fontWeight = FontWeight.Bold)
-            Text("🔴 تحت 70: %.1f%%  (منهم أقل من 54: %.1f%%) — الهدف أقل من 4%%".format(st.lowPct + st.veryLowPct, st.veryLowPct))
-            Text("🟠 فوق 180: %.0f%%  (منهم فوق 250: %.0f%%)".format(st.highPct + st.veryHighPct, st.veryHighPct))
+            Text("🔴 تحت ${u.format(70.0)}: %.1f%%  (منهم أقل من ${u.format(54.0)}: %.1f%%) — الهدف أقل من 4%%".format(st.lowPct + st.veryLowPct, st.veryLowPct))
+            Text("🟠 فوق ${u.format(180.0)}: %.0f%%  (منهم فوق ${u.format(250.0)}: %.0f%%)".format(st.highPct + st.veryHighPct, st.veryHighPct))
         }
         SectionCard("🧪 المؤشرات") {
-            Text("📊 متوسط السكر: %.0f mg/dL".format(st.meanMgdl))
+            Text("📊 متوسط السكر: ${u.formatWithUnit(st.meanMgdl)}")
             Text("🩸 السكر التراكمي التقديري (GMI): %.1f%%".format(st.gmiPercent))
             Text("〰️ التذبذب (CV): %.0f%%  %s".format(st.cvPercent, if (st.cvPercent <= 36) "✅ مستقر" else "⚠️ متذبذب"))
             Text("🔢 عدد القراءات: ${st.count}")

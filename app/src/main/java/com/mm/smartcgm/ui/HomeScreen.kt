@@ -123,8 +123,10 @@ fun HomeScreen() {
         else { Repo.db.addCarbs(CarbEntry(t, g)); Repo.touch(); null }
 
     when (entry) {
-        Entry.STICK -> NumberDialog("🩸 قياس وخز الإصبع (للمعايرة)", "mg/dL", { entry = null }) {
-            Repo.addStick(Fingerstick(t, it))
+        // The meter value is typed in the display unit and stored in mg/dL (otherwise 6.5 mmol/L would be saved as 6.5 mg/dL).
+        Entry.STICK -> NumberDialog("🩸 قياس وخز الإصبع (للمعايرة)", s.unit.label, { entry = null }) {
+            val mg = s.unit.toMgdl(it)
+            if (mg in 20.0..600.0) Repo.addStick(Fingerstick(t, mg))
         }
         Entry.INSULIN -> NumberDialog("💉 جرعة أنسولين سريع", "وحدات", { entry = null }) { saveDose(it) }
         Entry.CARBS -> NumberDialog("🍞 كربوهيدرات", "جرام", { entry = null }) { saveCarbs(it) }
