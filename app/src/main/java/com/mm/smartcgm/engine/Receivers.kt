@@ -9,8 +9,14 @@ import com.mm.smartcgm.core.AlertType
 class SnoozeReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val type = runCatching { AlertType.valueOf(intent.getStringExtra("type") ?: "") }.getOrNull() ?: return
-        Pipeline.snooze(type, intent.getIntExtra("minutes", 15))
         Alarms.stopSound()
+        if (intent.getBooleanExtra("ack", false)) {
+            // Acknowledge only: silence the sound, keep the schedule (urgent low re-alarms in 5 min if still low).
+            ctx.getSystemService(NotificationManager::class.java).cancel(1000 + type.ordinal)
+            return
+        }
+        if (type == AlertType.URGENT_LOW) return // never snoozable
+        Pipeline.snooze(type, intent.getIntExtra("minutes", 15))
         ctx.getSystemService(NotificationManager::class.java).cancel(1000 + type.ordinal)
     }
 }
@@ -18,5 +24,6 @@ class SnoozeReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         runCatching { MonitorService.start(ctx) }
+        Watchdog.schedule(ctx)
     }
 }

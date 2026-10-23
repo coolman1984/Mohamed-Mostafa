@@ -52,6 +52,12 @@ object Alarms {
         Intent(ctx, SnoozeReceiver::class.java).putExtra("type", type.name).putExtra("minutes", minutes),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
+    /** Stops the looping alarm sound without snoozing (the engine still repeats the alert on schedule). */
+    private fun ackIntent(ctx: Context, type: AlertType) = PendingIntent.getBroadcast(ctx,
+        5000 + type.ordinal,
+        Intent(ctx, SnoozeReceiver::class.java).putExtra("type", type.name).putExtra("ack", true),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
     fun show(ctx: Context, a: Alert) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         val n = Notification.Builder(ctx, if (a.critical) CH_CRITICAL else CH_NORMAL)
@@ -62,31 +68,47 @@ object Alarms {
             .setCategory(if (a.critical) Notification.CATEGORY_ALARM else Notification.CATEGORY_STATUS)
             .setContentIntent(openApp(ctx))
             .setAutoCancel(true)
-            .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 15 د", snoozeIntent(ctx, a.type, 15)).build())
-            .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 30 د", snoozeIntent(ctx, a.type, 30)).build())
+        if (a.type == AlertType.URGENT_LOW) {
+            // Urgent low can't be snoozed (medical rule #3): the only action is acknowledging the sound.
+            n.addAction(Notification.Action.Builder(null, "✅ أخدت سكر", ackIntent(ctx, a.type)).build())
+                .setOngoing(true).setAutoCancel(false)
+        } else {
+            n.addAction(Notification.Action.Builder(null, "⏸️ تأجيل 15 د", snoozeIntent(ctx, a.type, 15)).build())
+                .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 30 د", snoozeIntent(ctx, a.type, 30)).build())
+        }
+        if (a.critical) n.setDeleteIntent(ackIntent(ctx, a.type))
         if (a.critical) n.setFullScreenIntent(openApp(ctx), true)
         runCatching { nm.notify(1000 + a.type.ordinal, n.build()) }
         if (a.critical) playCritical(ctx)
     }
 
-    /** Alarm stream plays even when the ringer is on silent. */
+    /**
+     * Alarm stream plays even when the ringer is on silent. It LOOPS until the user acknowledges it
+     * (notification action, swipe, snooze, or opening the app), as AGENTS.md P1-2 requires.
+     */
     private fun playCritical(ctx: Context) {
+        if (runCatching { player?.isPlaying == true }.getOrDefault(false)) return // already ringing
         runCatching {
             player?.release()
             player = MediaPlayer().apply {
                 setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
                 setDataSource(ctx, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM))
-                isLooping = false
+                isLooping = true
                 prepare()
                 start()
-                setOnCompletionListener { it.release(); if (player === it) player = null }
             }
         }
         val vib = if (Build.VERSION.SDK_INT >= 31) ctx.getSystemService(VibratorManager::class.java).defaultVibrator
         else @Suppress("DEPRECATION") ctx.getSystemService(Vibrator::class.java)
-        runCatching { vib.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 300, 800, 300, 800), -1)) }
+        runCatching { vib.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 300, 800, 300, 800), 0)) }
+        vibrator = vib
     }
 
-    fun stopSound() { runCatching { player?.stop(); player?.release() }; player = null }
+    private var vibrator: Vibrator? = null
+
+    fun stopSound() {
+        runCatching { player?.stop(); player?.release() }; player = null
+        runCatching { vibrator?.cancel() }; vibrator = null
+    }
 }

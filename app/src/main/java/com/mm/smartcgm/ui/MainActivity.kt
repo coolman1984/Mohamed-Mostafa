@@ -34,7 +34,9 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.mm.smartcgm.data.AppMode
 import com.mm.smartcgm.data.Repo
+import com.mm.smartcgm.engine.Alarms
 import com.mm.smartcgm.engine.MonitorService
+import com.mm.smartcgm.engine.Watchdog
 
 class MainActivity : ComponentActivity() {
 
@@ -47,11 +49,18 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         else MonitorService.start(this)
 
+        Watchdog.schedule(this)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF2E7D32), secondary = Color(0xFF00796B))) {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) { AppRoot() }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Opening the app counts as acknowledging a ringing alarm.
+        Alarms.stopSound()
     }
 }
 

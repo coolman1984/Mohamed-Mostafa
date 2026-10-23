@@ -12,8 +12,10 @@ android {
         applicationId = "com.mm.smartcgm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes its run number so every build installs over the previous one (AGENTS.md P3-2).
+        val ci = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = ci ?: 1
+        versionName = "0.2.0" + (ci?.let { ".$it" } ?: "-local")
     }
 
     buildTypes {
@@ -43,4 +45,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 }

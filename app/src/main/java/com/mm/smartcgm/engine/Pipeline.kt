@@ -4,6 +4,7 @@ import android.content.Context
 import com.mm.smartcgm.cloud.CloudSync
 import com.mm.smartcgm.core.AlertEngine
 import com.mm.smartcgm.core.AlertState
+import com.mm.smartcgm.core.AlertStateCodec
 import com.mm.smartcgm.core.AlertType
 import com.mm.smartcgm.core.FollowerRole
 import com.mm.smartcgm.core.HOUR_MS
@@ -22,7 +23,13 @@ import kotlinx.coroutines.launch
 object Pipeline {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    @Volatile private var alertState = AlertState()
+    private const val ALERT_STATE_KEY = "alertState"
+
+    /** Persisted so a process restart neither forgets snoozes nor re-spams alerts that just fired (P1-2). */
+    @Volatile private var loaded: AlertState? = null
+    private var alertState: AlertState
+        get() = loaded ?: AlertStateCodec.decode(Repo.store.getString(ALERT_STATE_KEY)).also { loaded = it }
+        set(v) { loaded = v; Repo.store.putString(ALERT_STATE_KEY, AlertStateCodec.encode(v)) }
 
     fun onNewReading(ctx: Context) {
         evaluate(ctx)
@@ -53,11 +60,13 @@ object Pipeline {
         val s = Repo.settings.value
         val recent = Repo.readings(now - HOUR_MS)
         val forecast = Prediction.forecast(recent, s.alerts.low.thresholdMgdl)
-        val (alerts, next) = AlertEngine.evaluate(recent.lastOrNull(), forecast, Repo.sensorStatus(now), s.alerts, alertState, now)
+        val (alerts, next) = AlertEngine.evaluate(recent.lastOrNull(), forecast, Repo.sensorStatus(now),
+            s.alerts.copy(unit = s.unit), alertState, now)
         alertState = next
         alerts.forEach { Alarms.show(ctx, it) }
     }
 
+    @Synchronized
     fun snooze(type: AlertType, minutes: Int) {
         alertState = AlertEngine.snooze(alertState, type, minutes, System.currentTimeMillis())
     }

@@ -51,7 +51,9 @@ class MonitorService : Service() {
             loop = Pipeline.scope.launch {
                 while (isActive) {
                     val s = Repo.settings.value
-                    if (s.mode == AppMode.PATIENT && s.pollJuggluco) runCatching { JugglucoWebSource.poll() }
+                    if (s.mode == AppMode.PATIENT && s.pollJuggluco) {
+                        Repo.lastJugglucoWebStatus = runCatching { JugglucoWebSource.poll(s.jugglucoSecret) }.getOrDefault(0)
+                    }
                     Pipeline.tick(this@MonitorService)
                     getSystemService(NotificationManager::class.java).notify(Alarms.SERVICE_ID, buildNotification())
                     delay(60_000)
@@ -72,7 +74,7 @@ class MonitorService : Service() {
         val recent = Repo.readings(now - HOUR_MS)
         val last = recent.lastOrNull()
         val title = if (last == null) "في انتظار قراءات الحساس…"
-        else "%.0f mg/dL %s".format(last.mgdl, Trend.arrow(recent).symbol)
+        else "%s %s".format(Repo.settings.value.unit.formatWithUnit(last.mgdl), Trend.arrow(recent).symbol)
         val text = Repo.sensorStatus(now)?.message ?: "📡 متابعة مستمرة"
         return Notification.Builder(this, Alarms.CH_SERVICE)
             .setSmallIcon(R.drawable.ic_launcher)
