@@ -141,4 +141,46 @@ class CoreTest {
         assertEquals(acc to FollowerRole.VIEWER, Pairing.parseInvite(Pairing.inviteCode(acc, FollowerRole.VIEWER)))
         assertNull(Pairing.parseInvite("bad"))
     }
+
+    /** AGENTS.md acceptance test #8, worked by hand. ICR 10 g/u, ISF 50, target 100. */
+    @Test fun bolusAcceptanceNumbers() {
+        val s = TherapySettings(icr = 10.0, isf = 50.0, targetMgdl = 100.0)
+        // 60 g / 10 = 6.0 u meal, BG at target → no correction → 6.0 u.
+        assertEquals(6.0, BolusAdvisor.suggest(60.0, 100.0, 0.0, s).totalUnits)
+        // 63 g / 10 = 6.3 u → rounded DOWN to the 0.5 step → 6.0 u (never up).
+        assertEquals(6.0, BolusAdvisor.suggest(63.0, 100.0, 0.0, s).totalUnits)
+        // BG 65 (below the 70 low line) → 0 u even with 60 g of carbs.
+        assertEquals(0.0, BolusAdvisor.suggest(60.0, 65.0, 0.0, s).totalUnits)
+        // IOB 2 u and BG 250 → correction blocked (stacking): 0 g → 0 u.
+        assertEquals(0.0, BolusAdvisor.suggest(0.0, 250.0, 2.0, s).totalUnits)
+    }
+
+    /** 1 mmol/L = 18.0182 mg/dL. 100/18.0182 = 5.5499 → "5.5"; 180/18.0182 = 9.990 → "10.0"; 5.0 mmol = 90.091 mg. */
+    @Test fun unitConversion() {
+        assertEquals("120", GlucoseUnit.MGDL.format(120.4))
+        assertEquals("5.5", GlucoseUnit.MMOLL.format(100.0))
+        assertEquals("10.0", GlucoseUnit.MMOLL.format(180.0))
+        assertEquals(90.091, GlucoseUnit.MMOLL.toMgdl(5.0), 1e-9)
+        assertEquals(100.0, GlucoseUnit.MMOLL.toMgdl(GlucoseUnit.MMOLL.fromMgdl(100.0)), 1e-9)
+        assertEquals("3.0 mmol/L", GlucoseUnit.MMOLL.formatWithUnit(54.0))
+    }
+
+    @Test fun alertTextUsesUnitButThresholdStaysMgdl() {
+        val cfg = AlertConfig(unit = GlucoseUnit.MMOLL)
+        val (a, _) = AlertEngine.evaluate(GlucoseReading(t0, 50.0), null, null, cfg, AlertState(), t0)
+        val urgent = a.first { it.type == AlertType.URGENT_LOW }
+        assertTrue(urgent.critical)
+        assertTrue("2.8 mmol/L" in urgent.body, urgent.body) // 50/18.0182 = 2.775 → 2.8
+    }
+
+    @Test fun alertStateSurvivesRestart() {
+        val st = AlertState(mapOf(AlertType.LOW to t0), mapOf(AlertType.HIGH to t0 + 5, AlertType.LOW to t0 + 9))
+        assertEquals(st, AlertStateCodec.decode(AlertStateCodec.encode(st)))
+        assertEquals(AlertState(), AlertStateCodec.decode(null))
+        assertEquals(AlertState(), AlertStateCodec.decode("garbage|NOPE=1;LOW=x"))
+        // Urgent low still fires while "snoozed" after a restored state.
+        val snoozed = AlertStateCodec.decode(AlertStateCodec.encode(AlertState(snoozedUntil = mapOf(AlertType.URGENT_LOW to t0 + 3_600_000))))
+        val (a, _) = AlertEngine.evaluate(GlucoseReading(t0, 40.0), null, null, AlertConfig(), snoozed, t0)
+        assertTrue(a.any { it.type == AlertType.URGENT_LOW })
+    }
 }

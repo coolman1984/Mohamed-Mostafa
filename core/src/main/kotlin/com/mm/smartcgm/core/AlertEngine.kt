@@ -19,6 +19,8 @@ data class AlertConfig(
     /** Raise "signal lost" after this many minutes without a reading. */
     val staleMinutes: Int = 20,
     val criticalOverride: Boolean = true,
+    /** Display unit for alert texts only; thresholds above stay in mg/dL. */
+    val unit: GlucoseUnit = GlucoseUnit.MGDL,
 )
 
 enum class AlertType { URGENT_LOW, LOW, PREDICTED_LOW, HIGH, SIGNAL_LOST, SENSOR_REPLACE }
@@ -50,11 +52,11 @@ object AlertEngine {
             val g = latest.mgdl
             when {
                 g < cfg.urgentLowMgdl -> candidates += Alert(AlertType.URGENT_LOW, true, "🚨 هبوط خطير",
-                    "السكر %.0f — خد سكر سريع فوراً!".format(g)) to 5
+                    "السكر ${cfg.unit.formatWithUnit(g)} — خد سكر سريع فوراً!") to 5
                 cfg.low.enabled && g < cfg.low.thresholdMgdl -> candidates += Alert(AlertType.LOW, cfg.criticalOverride,
-                    "🔻 السكر واطي", "السكر %.0f".format(g)) to cfg.low.repeatMinutes
+                    "🔻 السكر واطي", "السكر ${cfg.unit.formatWithUnit(g)}") to cfg.low.repeatMinutes
                 cfg.high.enabled && g > cfg.high.thresholdMgdl -> candidates += Alert(AlertType.HIGH, false,
-                    "🔺 السكر عالي", "السكر %.0f".format(g)) to cfg.high.repeatMinutes
+                    "🔺 السكر عالي", "السكر ${cfg.unit.formatWithUnit(g)}") to cfg.high.repeatMinutes
             }
             val toLow = forecast?.minutesToLow
             if (cfg.predictiveLow && cfg.low.enabled && toLow != null && toLow > 0 && g >= cfg.low.thresholdMgdl) {
