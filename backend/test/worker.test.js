@@ -108,3 +108,39 @@ test('owner can list and revoke followers', async () => {
   await call('DELETE', `/v1/p/${PID}/followers/${list[0].id}`, { token: OWNER });
   assert.equal((await call('GET', `/v1/p/${PID}/status`, { token: v })).status, 401);
 });
+
+test('readings carry optional source/serial/ageDays/trend; legacy tuples still work', async () => {
+  const { call } = setup();
+  const v = await withFollower(call, 'VIEWER');
+  const now = Date.now();
+  const up = await call('POST', `/v1/p/${PID}/readings`, { token: OWNER, body: { readings: [
+    [now - 120000, 100],
+    { t: now - 60000, mgdl: 110, source: 'linx_ble', serial: 'GX01S-ABC123', ageDays: 11.5, trend: 'rising' },
+    { t: now, mgdl: 112, source: 'evil' },
+    { t: now, mgdl: 112, trend: 'up!!' },
+  ] } });
+  assert.deepEqual(up.body, { stored: 2, rejected: 2 });
+  assert.deepEqual((await call('GET', `/v1/p/${PID}/readings`, { token: v })).body.readings, [[now - 120000, 100], [now - 60000, 110]]);
+  const full = (await call('GET', `/v1/p/${PID}/readings?format=full`, { token: v })).body.readings;
+  assert.deepEqual(full, [{ t: now - 120000, mgdl: 100 },
+    { t: now - 60000, mgdl: 110, source: 'linx_ble', serial: 'GX01S-ABC123', ageDays: 11.5, trend: 'rising' }]);
+  await call('PUT', `/v1/p/${PID}/status`, { token: OWNER, body: { mgdl: 110, source: 'linx_ble', ageDays: 11.5, trend: 'steady', serial: 'bad serial!' } });
+  const st = (await call('GET', `/v1/p/${PID}/status`, { token: v })).body.status;
+  assert.equal(st.source, 'linx_ble'); assert.equal(st.trend, 'steady'); assert.equal(st.serial, undefined);
+});
+
+test('batch backfill is idempotent and keeps existing rows', async () => {
+  const { call } = setup();
+  await call('POST', `/v1/p/${PID}/register`, { body: { token: OWNER } });
+  const now = Date.now();
+  const hist = Array.from({ length: 1440 }, (_, i) => ({ t: now - (1440 - i) * 60000, mgdl: 100 + (i % 50), source: 'linx_ble', serial: 'S1', trend: 'steady' }));
+  const r1 = await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: hist } });
+  assert.deepEqual(r1.body, { received: 1440, inserted: 1440, duplicates: 0, rejected: 0 });
+  const r2 = await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: [...hist.slice(0, 10).map((x) => ({ ...x, mgdl: 300 })), [now, 90], [now, 91]] } });
+  assert.deepEqual(r2.body, { received: 12, inserted: 1, duplicates: 11, rejected: 0 });
+  const full = (await call('GET', `/v1/p/${PID}/readings?format=full&days=2`, { token: OWNER })).body.readings;
+  assert.equal(full.length, 1440); // MAX_PULL page; first row unchanged by the re-upload
+  assert.equal(full[0].mgdl, 100);
+  assert.equal((await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: new Array(1441).fill([now, 100]) } })).status, 400);
+  assert.equal((await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: [[now - 31 * 86400_000, 100]] } })).body.rejected, 1);
+});

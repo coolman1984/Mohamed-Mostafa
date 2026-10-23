@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 export function makeDb() {
   const s = new DatabaseSync(':memory:');
-  s.exec(readFileSync(new URL('../migrations/0001_init.sql', import.meta.url), 'utf8'));
+  for (const f of ['0001_init.sql', '0002_reading_source.sql']) s.exec(readFileSync(new URL('../migrations/' + f, import.meta.url), 'utf8'));
   const stmt = (sql, args = []) => ({
     bind: (...a) => stmt(sql, a),
     first: async () => s.prepare(sql).get(...args) ?? null,

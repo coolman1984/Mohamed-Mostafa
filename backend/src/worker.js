@@ -9,10 +9,41 @@
 
 export const LIMITS = {
   MIN_LOW: 60, MAX_LOW: 100, MIN_HIGH: 120, MAX_HIGH: 300, MIN_GAP: 30, URGENT_LOW: 55,
-  MAX_BATCH: 500, MIN_MGDL: 20, MAX_MGDL: 600, KEEP_DAYS: 30, INVITE_TTL_MS: 24 * 3600_000,
+  MAX_BATCH: 500, MAX_BACKFILL: 1440, MAX_BODY: 64_000, MAX_BACKFILL_BODY: 240_000, MIN_MGDL: 20, MAX_MGDL: 600, KEEP_DAYS: 30, INVITE_TTL_MS: 24 * 3600_000,
   MAX_PULL: 1440, MAX_EVENTS: 50, MAX_DOSE_U: 50, MAX_CARBS_G: 300, MAX_FOLLOWERS: 20,
 };
 const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+export const SOURCES = ['juggluco', 'notification', 'linx_ble', 'manual'];
+export const TRENDS = ['rising_fast', 'rising', 'steady', 'falling', 'falling_fast'];
+const SERIAL_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+// Accepts the legacy [t, mgdl] tuple or {t, mgdl, source?, serial?, ageDays?, trend?}. Returns a clean row or null.
+export function normalizeReading(r, now) {
+  let o;
+  if (Array.isArray(r)) o = { t: r[0], mgdl: r[1] };
+  else if (r && typeof r === 'object') o = r;
+  else return null;
+  const { t, mgdl } = o;
+  if (!Number.isInteger(t) || t <= 1e12 || t >= now + 3600_000) return null;
+  if (typeof mgdl !== 'number' || !(mgdl >= LIMITS.MIN_MGDL && mgdl <= LIMITS.MAX_MGDL)) return null;
+  if (o.source != null && !SOURCES.includes(o.source)) return null;
+  if (o.serial != null && !(typeof o.serial === 'string' && SERIAL_RE.test(o.serial))) return null;
+  if (o.ageDays != null && !(typeof o.ageDays === 'number' && o.ageDays >= 0 && o.ageDays <= 30)) return null;
+  if (o.trend != null && !TRENDS.includes(o.trend)) return null;
+  return [t, Math.round(mgdl), o.source ?? null, o.serial ?? null, o.ageDays ?? null, o.trend ?? null];
+}
+
+// One SQL statement per request (json_each) so even a 1440-row backfill is a single D1 query on the free plan.
+function insertRows(db, pid, rows, conflict) {
+  return db.prepare(`INSERT INTO readings (patient, t, mgdl, source, serial, age_days, trend)
+    SELECT ?1, json_extract(value,'$[0]'), json_extract(value,'$[1]'), json_extract(value,'$[2]'),
+      json_extract(value,'$[3]'), json_extract(value,'$[4]'), json_extract(value,'$[5]') FROM json_each(?2) WHERE true
+    ON CONFLICT(patient, t) DO ${conflict === 'replace'
+      ? 'UPDATE SET mgdl=excluded.mgdl, source=excluded.source, serial=excluded.serial, age_days=excluded.age_days, trend=excluded.trend'
+      : 'NOTHING'}`).bind(pid, JSON.stringify(rows));
+}
+const changes = (r) => (r?.meta?.changes ?? r?.changes ?? 0);
+
 const ID_RE = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12,32}$/;
 
 export function proposalProblem(p) {
@@ -45,9 +76,9 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 });
 const err = (status, message) => json({ error: message }, status);
 
-async function body(req) {
+async function body(req, max = LIMITS.MAX_BODY) {
   const text = await req.text();
-  if (text.length > 64_000) throw new HttpError(413, 'too large');
+  if (text.length > max) throw new HttpError(413, 'too large');
   try { return text ? JSON.parse(text) : {}; } catch { throw new HttpError(400, 'bad json'); }
 }
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -68,7 +99,7 @@ export async function handle(req, env, now = Date.now()) {
   const parts = url.pathname.split('/').filter(Boolean);
   const m = req.method;
   try {
-    if (parts.length === 0 || (parts[0] === 'v1' && parts.length === 1)) return json({ ok: true, service: 'smartcgm-sync' });
+    if (parts.length === 0 || (parts[0] === 'v1' && parts.length === 1)) return json({ ok: true, service: 'smartcgm-sync', api: 2, sources: SOURCES });
     if (parts[0] !== 'v1') return err(404, 'not found');
 
     // Follower redeems a one-time invite code -> gets its own token.
@@ -135,24 +166,46 @@ export async function handle(req, env, now = Date.now()) {
     }
 
     if (res === 'readings') {
-      if (m === 'POST') {
+      if (m === 'POST' && (sub === undefined || sub === 'batch') && parts.length <= 5) {
+        // POST /readings      = live upload (<=500, newest value wins on same timestamp)
+        // POST /readings/batch = history backfill (<=1440, idempotent: existing (patient,t) rows are kept)
         await auth(req, db, pid, ['OWNER']);
-        const b = await body(req);
+        const backfill = sub === 'batch';
+        const max = backfill ? LIMITS.MAX_BACKFILL : LIMITS.MAX_BATCH;
+        const b = await body(req, backfill ? LIMITS.MAX_BACKFILL_BODY : LIMITS.MAX_BODY);
         const list = Array.isArray(b.readings) ? b.readings : null;
-        if (!list || list.length > LIMITS.MAX_BATCH) return err(400, `readings: array of at most ${LIMITS.MAX_BATCH}`);
-        const ok = list.filter((r) => Array.isArray(r) && Number.isInteger(r[0]) && r[0] > 1e12 && r[0] < now + 3600_000 &&
-          typeof r[1] === 'number' && r[1] >= LIMITS.MIN_MGDL && r[1] <= LIMITS.MAX_MGDL);
-        const stmts = ok.map((r) => db.prepare('INSERT OR REPLACE INTO readings (patient, t, mgdl) VALUES (?,?,?)').bind(pid, r[0], Math.round(r[1])));
-        stmts.push(db.prepare('DELETE FROM readings WHERE patient = ? AND t < ?').bind(pid, now - LIMITS.KEEP_DAYS * 86400_000));
-        await db.batch(stmts);
-        return json({ stored: ok.length, rejected: list.length - ok.length });
+        if (!list || list.length > max) return err(400, `readings: array of at most ${max}`);
+        const keepFrom = now - LIMITS.KEEP_DAYS * 86400_000;
+        const seen = new Map();
+        let rejected = 0;
+        for (const r of list) {
+          const n = normalizeReading(r, now);
+          if (!n || n[0] < keepFrom) { rejected++; continue; }
+          seen.set(n[0], n); // duplicates inside one request: last one wins
+        }
+        const rows = [...seen.values()];
+        const res1 = rows.length ? await insertRows(db, pid, rows, backfill ? 'ignore' : 'replace').run() : null;
+        await db.prepare('DELETE FROM readings WHERE patient = ? AND t < ?').bind(pid, keepFrom).run();
+        if (!backfill) return json({ stored: rows.length, rejected });
+        const inserted = changes(res1);
+        return json({ received: list.length, inserted, duplicates: rows.length - inserted + (list.length - rejected - rows.length), rejected });
       }
-      if (m === 'GET') {
+      if (m === 'GET' && parts.length === 4) {
         await auth(req, db, pid, ['OWNER', 'ADMIN', 'VIEWER']);
         const after = Number(url.searchParams.get('after') || 0);
-        const since = Math.max(Number.isFinite(after) ? after : 0, now - 86400_000);
-        const r = await db.prepare('SELECT t, mgdl FROM readings WHERE patient = ? AND t > ? ORDER BY t LIMIT ?').bind(pid, since, LIMITS.MAX_PULL).all();
-        return json({ readings: r.results.map((x) => [x.t, x.mgdl]) });
+        const full = url.searchParams.get('format') === 'full';
+        const days = full ? Math.min(Math.max(Number(url.searchParams.get('days')) || 1, 1), LIMITS.KEEP_DAYS) : 1;
+        const since = Math.max(Number.isFinite(after) ? after : 0, now - days * 86400_000);
+        const r = await db.prepare('SELECT t, mgdl, source, serial, age_days, trend FROM readings WHERE patient = ? AND t > ? ORDER BY t LIMIT ?').bind(pid, since, LIMITS.MAX_PULL).all();
+        if (!full) return json({ readings: r.results.map((x) => [x.t, x.mgdl]) });
+        return json({ readings: r.results.map((x) => {
+          const o = { t: x.t, mgdl: x.mgdl };
+          if (x.source != null) o.source = x.source;
+          if (x.serial != null) o.serial = x.serial;
+          if (x.age_days != null) o.ageDays = x.age_days;
+          if (x.trend != null) o.trend = x.trend;
+          return o;
+        }) });
       }
     }
 
@@ -162,6 +215,10 @@ export async function handle(req, env, now = Date.now()) {
         const b = await body(req);
         const st = {};
         for (const k of ['time', 'mgdl', 'iob', 'cob', 'sensorStart']) if (typeof b[k] === 'number' && isFinite(b[k])) st[k] = b[k];
+        if (SOURCES.includes(b.source)) st.source = b.source;
+        if (typeof b.serial === 'string' && SERIAL_RE.test(b.serial)) st.serial = b.serial;
+        if (typeof b.ageDays === 'number' && b.ageDays >= 0 && b.ageDays <= 30) st.ageDays = b.ageDays;
+        if (TRENDS.includes(b.trend)) st.trend = b.trend;
         st.updated = now;
         await db.prepare('INSERT OR REPLACE INTO status (patient, json) VALUES (?,?)').bind(pid, JSON.stringify(st)).run();
         return json({ ok: true });
