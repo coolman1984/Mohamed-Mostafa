@@ -1,0 +1,12 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "patients": {
+      "$code": {
+        ".read": "$code.length >= 16",
+        ".write": "$code.length >= 16"
+      }
+    }
+  }
+}

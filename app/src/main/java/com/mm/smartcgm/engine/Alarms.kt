@@ -1,0 +1,92 @@
+package com.mm.smartcgm.engine
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import com.mm.smartcgm.R
+import com.mm.smartcgm.core.Alert
+import com.mm.smartcgm.core.AlertType
+import com.mm.smartcgm.ui.MainActivity
+
+object Alarms {
+    const val CH_CRITICAL = "critical_v1"
+    const val CH_NORMAL = "alerts_v1"
+    const val CH_SERVICE = "service_v1"
+    const val SERVICE_ID = 1
+
+    private var player: MediaPlayer? = null
+
+    fun createChannels(ctx: Context) {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val alarmAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+        nm.createNotificationChannel(NotificationChannel(CH_CRITICAL, "🚨 إنذارات حرجة", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "هبوط خطير — بيتجاوز الصامت وعدم الإزعاج"
+            setBypassDnd(true)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 800, 300, 800, 300, 800)
+            setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), alarmAttrs)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
+        nm.createNotificationChannel(NotificationChannel(CH_NORMAL, "🔔 تنبيهات السكر", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "📡 المتابعة المستمرة", NotificationManager.IMPORTANCE_LOW))
+    }
+
+    private fun openApp(ctx: Context) = PendingIntent.getActivity(ctx, 0,
+        Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    private fun snoozeIntent(ctx: Context, type: AlertType, minutes: Int) = PendingIntent.getBroadcast(ctx,
+        type.ordinal * 100 + minutes,
+        Intent(ctx, SnoozeReceiver::class.java).putExtra("type", type.name).putExtra("minutes", minutes),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    fun show(ctx: Context, a: Alert) {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val n = Notification.Builder(ctx, if (a.critical) CH_CRITICAL else CH_NORMAL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(a.title)
+            .setContentText(a.body)
+            .setStyle(Notification.BigTextStyle().bigText(a.body))
+            .setCategory(if (a.critical) Notification.CATEGORY_ALARM else Notification.CATEGORY_STATUS)
+            .setContentIntent(openApp(ctx))
+            .setAutoCancel(true)
+            .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 15 د", snoozeIntent(ctx, a.type, 15)).build())
+            .addAction(Notification.Action.Builder(null, "⏸️ تأجيل 30 د", snoozeIntent(ctx, a.type, 30)).build())
+        if (a.critical) n.setFullScreenIntent(openApp(ctx), true)
+        runCatching { nm.notify(1000 + a.type.ordinal, n.build()) }
+        if (a.critical) playCritical(ctx)
+    }
+
+    /** Alarm stream plays even when the ringer is on silent. */
+    private fun playCritical(ctx: Context) {
+        runCatching {
+            player?.release()
+            player = MediaPlayer().apply {
+                setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                setDataSource(ctx, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM))
+                isLooping = false
+                prepare()
+                start()
+                setOnCompletionListener { it.release(); if (player === it) player = null }
+            }
+        }
+        val vib = if (Build.VERSION.SDK_INT >= 31) ctx.getSystemService(VibratorManager::class.java).defaultVibrator
+        else @Suppress("DEPRECATION") ctx.getSystemService(Vibrator::class.java)
+        runCatching { vib.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 300, 800, 300, 800), -1)) }
+    }
+
+    fun stopSound() { runCatching { player?.stop(); player?.release() }; player = null }
+}
