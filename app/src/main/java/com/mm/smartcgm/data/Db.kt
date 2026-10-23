@@ -13,7 +13,7 @@ import com.mm.smartcgm.core.InsulinKind
 import com.mm.smartcgm.core.MedicationEntry
 
 /** Local store. Readings keep the RAW sensor value; calibration is applied on read. */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, 1) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE readings(time INTEGER PRIMARY KEY, mgdl REAL, source TEXT, sensor TEXT)")
@@ -21,9 +21,24 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, 1) {
         db.execSQL("CREATE TABLE doses(time INTEGER, units REAL, kind TEXT)")
         db.execSQL("CREATE TABLE carbs(time INTEGER, grams REAL, note TEXT)")
         db.execSQL("CREATE TABLE meds(time INTEGER, name TEXT, ingredient TEXT, effect TEXT)")
+        createIndexes(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    /**
+     * Schema plan: v1 = initial tables. v2 = time indexes on doses/carbs/meds (readings/sticks are already keyed by
+     * time). Every future change gets its own `if (oldVersion < N)` block; never drop user data in a migration.
+     */
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) createIndexes(db)
+    }
+
+    private fun createIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS doses_time ON doses(time)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS carbs_time ON carbs(time)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS meds_time ON meds(time)")
+    }
+
+    companion object { const val DB_VERSION = 2 }
 
     /** Returns false if a reading already exists within ±30 s (same value from two sources). */
     fun insertReading(r: GlucoseReading): Boolean {

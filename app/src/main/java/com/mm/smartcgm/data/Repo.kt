@@ -53,17 +53,45 @@ object Repo {
         if (!id.isNullOrBlank() && id != s.sensorId) {
             updateSettings { it.copy(sensorId = id, sensorStartMs = reading.timeMs) }
         }
+        sourceSeen[sourceGroup(reading.source)] = System.currentTimeMillis()
         if (db.insertReading(reading)) {
             touch()
             Pipeline.onNewReading(app)
         }
     }
 
-    fun calibration(now: Long = System.currentTimeMillis()): Calibration {
+    /** Last time (wall clock) each kind of source delivered something; feeds the "data source health" card. */
+    val sourceSeen = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun sourceGroup(source: String): String = when {
+        source.startsWith("juggluco-web") -> "juggluco-web"
+        source.startsWith("app:") -> "notification"
+        else -> source
+    }
+
+    /** Last HTTP status of the Juggluco web poll (-1 = not tried, 0 = not reachable, 403 = wrong API secret). */
+    @Volatile var lastJugglucoWebStatus: Int = -1
+
+    private var calCache: Calibration? = null
+    private var calKey: Long = Long.MIN_VALUE
+
+    fun addStick(s: com.mm.smartcgm.core.Fingerstick) {
+        db.addStick(s)
+        invalidateCalibration()
+        touch()
+    }
+
+    fun invalidateCalibration() = synchronized(this) { calCache = null }
+
+    /** Cached: the fit only changes when a finger-stick is added, or every 10 minutes as the 7-day window slides. */
+    fun calibration(now: Long = System.currentTimeMillis()): Calibration = synchronized(this) {
+        val key = now / (10 * 60_000L)
+        calCache?.takeIf { calKey == key }?.let { return it }
         val sticks = db.sticks(now - 7 * DAY_MS)
-        if (sticks.isEmpty()) return Calibration.IDENTITY
-        val raw = db.readings(now - 7 * DAY_MS - HOUR_MS)
-        return Calibration.fit(Calibration.pair(raw, sticks))
+        val fit = if (sticks.isEmpty()) Calibration.IDENTITY
+        else Calibration.fit(Calibration.pair(db.readings(now - 7 * DAY_MS - HOUR_MS), sticks))
+        calCache = fit; calKey = key
+        fit
     }
 
     fun sensorStatus(now: Long = System.currentTimeMillis()): SensorStatus? =
