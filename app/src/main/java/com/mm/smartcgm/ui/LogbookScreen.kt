@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mm.smartcgm.core.DAY_MS
 import com.mm.smartcgm.core.Logbook
 import com.mm.smartcgm.core.Stats
@@ -38,7 +39,9 @@ fun LogbookScreen() {
     val now = System.currentTimeMillis()
     val from = now - days * DAY_MS
     val readings = remember(key, days) { Repo.readings(from - 3_600_000) }
-    val rows = remember(key, days) { Logbook.hourly(readings, from, now, s.therapy.lowMgdl, s.therapy.highMgdl) }
+    val rows = remember(key, days) {
+        Logbook.hourly(readings, from, now, s.therapy.lowMgdl, s.therapy.highMgdl, events = Repo.logEvents(from - 3_600_000))
+    }
 
     Column {
         Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -55,16 +58,17 @@ fun LogbookScreen() {
             }) { Text("📄 PDF") }
         }
         Row(Modifier.fillMaxWidth().padding(8.dp)) {
-            listOf("اليوم", "التاريخ", "التوقيت", "نسبة السكر").forEach {
-                Text(it, Modifier.weight(1f), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            listOf("اليوم", "التاريخ", "التوقيت", "نسبة السكر", "الأحداث").forEachIndexed { i, it ->
+                Text(it, Modifier.weight(if (i == 4) 1.6f else 1f), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             }
         }
         HorizontalDivider()
         LazyColumn {
             items(rows, key = { it.hourStartMs }) { r ->
                 Row(Modifier.fillMaxWidth().background(rangeColor(r.color)).padding(vertical = 6.dp)) {
-                    listOf(r.dayName, r.date, r.time, Logbook.value(r, Repo.settings.value.unit).ifEmpty { "—" }).forEach {
-                        Text(it, Modifier.weight(1f), textAlign = TextAlign.Center)
+                    listOf(r.dayName, r.date, r.time, Logbook.value(r, Repo.settings.value.unit).ifEmpty { "—" }, r.events).forEachIndexed { i, it ->
+                        Text(it, Modifier.weight(if (i == 4) 1.6f else 1f), textAlign = TextAlign.Center,
+                            fontSize = if (i == 4) 12.sp else androidx.compose.ui.unit.TextUnit.Unspecified)
                     }
                 }
                 HorizontalDivider()

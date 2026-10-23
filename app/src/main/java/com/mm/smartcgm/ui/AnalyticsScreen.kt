@@ -44,6 +44,8 @@ fun AnalyticsScreen() {
     val readings = remember(key, days) { Repo.readings(now - days * DAY_MS) }
     val st = remember(readings) { Stats.compute(readings, s.therapy.lowMgdl, s.therapy.highMgdl) }
     val agp = remember(readings) { Stats.agp(readings) }
+    val coverage = remember(readings) { Stats.coveragePercent(readings, now - days * DAY_MS, now) }
+    val overlays = remember(readings) { Stats.dailyOverlays(readings).takeLast(14) }
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
         Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -66,13 +68,22 @@ fun AnalyticsScreen() {
             Text("🩸 السكر التراكمي التقديري (GMI): %.1f%%".format(st.gmiPercent))
             Text("〰️ التذبذب (CV): %.0f%%  %s".format(st.cvPercent, if (st.cvPercent <= 36) "✅ مستقر" else "⚠️ متذبذب"))
             Text("🔢 عدد القراءات: ${st.count}")
+            val ok = Stats.meetsConsensus(coverage, days)
+            Text("📶 البيانات المتاحة: %.0f%% من الوقت — %s".format(coverage,
+                if (ok) "✅ كافية للتقرير (14 يوم و70%+)" else if (days < 14) "ℹ️ المعيار الدولي محتاج 14 يوم" else "⚠️ أقل من 70% — فسّر بحذر"),
+                color = if (ok || days < 14) androidx.compose.ui.graphics.Color.Unspecified else Orange)
         }
         SectionCard("🌗 المنحنى اليومي المجمّع (AGP)") { AgpChart(agp, s.therapy.lowMgdl, s.therapy.highMgdl) }
+        SectionCard("🗓️ الأيام فوق بعض") { DailyOverlayChart(overlays, s.therapy.lowMgdl, s.therapy.highMgdl) }
         SectionCard("📈 المنحنى الكامل") { GlucoseChart(readings, now - days * DAY_MS, now, s.therapy.lowMgdl, s.therapy.highMgdl) }
         OutlinedButton(onClick = {
-            val rows = Logbook.hourly(readings, now - days * DAY_MS, now, s.therapy.lowMgdl, s.therapy.highMgdl)
+            val rows = Logbook.hourly(readings, now - days * DAY_MS, now, s.therapy.lowMgdl, s.therapy.highMgdl,
+                events = Repo.logEvents(now - days * DAY_MS))
             Exporter.share(ctx, Exporter.pdf(ctx, rows, st, "تقرير السكر للطبيب — آخر $days يوم"), "application/pdf")
         }, Modifier.padding(12.dp)) { Text("🩺 صدّر تقرير كامل للدكتور (PDF)") }
+        OutlinedButton(onClick = {
+            Exporter.share(ctx, Exporter.agpPdf(ctx, st, agp, coverage, days, s.therapy.lowMgdl, s.therapy.highMgdl), "application/pdf")
+        }, Modifier.padding(horizontal = 12.dp)) { Text("📊 تقرير AGP بالرسم للدكتور (PDF)") }
     }
 }
 

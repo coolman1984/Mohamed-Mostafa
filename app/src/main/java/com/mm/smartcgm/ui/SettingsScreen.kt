@@ -150,6 +150,9 @@ fun SettingsScreen() {
             }
         }
 
+        if (s.mode == AppMode.PATIENT) CalibrationSection(rememberRefreshKey())
+        if (s.mode == AppMode.FOLLOWER && s.followRole == FollowerRole.ADMIN) ProposeThresholdsSection()
+
         SectionCard("📏 وحدة القياس") {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 GlucoseUnit.entries.forEach { u -> FilterChip(s.unit == u, { upd { it.copy(unit = u) } }, label = { Text(u.label) }) }

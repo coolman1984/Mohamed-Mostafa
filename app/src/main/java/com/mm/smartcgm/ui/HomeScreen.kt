@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mm.smartcgm.cloud.CloudSync
 import com.mm.smartcgm.core.BolusAdvisor
+import com.mm.smartcgm.core.Calibration
 import com.mm.smartcgm.core.CarbEntry
 import com.mm.smartcgm.core.Fingerstick
 import com.mm.smartcgm.core.FollowerRole
@@ -57,6 +58,7 @@ fun HomeScreen() {
     val iob = remember(key) { Repo.iob(now) }
     val cob = remember(key) { Repo.cob(now) }
     var entry by remember { mutableStateOf<Entry?>(null) }
+    var suspectStick by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     val follower = s.mode == AppMode.FOLLOWER
     val canEdit = !follower || s.followRole == FollowerRole.ADMIN
 
@@ -66,6 +68,9 @@ fun HomeScreen() {
         }
         if (!follower && !s.setupDone) SetupWizard()
         if (!follower) SourceHealthCard(last?.timeMs, now)
+        if (!follower && s.newSensorSuspectMs > 0) NewSensorPrompt()
+        val proposal = remember(key) { if (!follower) Repo.pendingProposal() else null }
+        proposal?.let { ProposalCard(it) }
         // Big current value
         val color = last?.let { colorFor(it.mgdl, s.therapy.lowMgdl, s.therapy.highMgdl) } ?: Color.Gray
         Card(Modifier.fillMaxWidth().padding(12.dp), colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f))) {
@@ -90,10 +95,7 @@ fun HomeScreen() {
                 color = Red, fontWeight = FontWeight.Bold)
         }
 
-        sensor?.let {
-            val c = when (it.phase) { SensorPhase.EXTENDED, SensorPhase.EXPIRED -> Red; else -> MaterialTheme.colorScheme.onSurface }
-            Text("🩹 ${it.message}", Modifier.padding(horizontal = 16.dp, vertical = 6.dp), color = c)
-        } ?: Text("🩹 تاريخ تركيب الحساس مش متسجل — حدده من الإعدادات.", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        sensor?.let { SensorRing(it) } ?: Text("🩹 تاريخ تركيب الحساس مش متسجل — حدده من الإعدادات.", Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("💉 أنسولين فعال: %.1f وحدة".format(iob))
@@ -126,12 +128,21 @@ fun HomeScreen() {
         // The meter value is typed in the display unit and stored in mg/dL (otherwise 6.5 mmol/L would be saved as 6.5 mg/dL).
         Entry.STICK -> NumberDialog("🩸 قياس وخز الإصبع (للمعايرة)", s.unit.label, { entry = null }) {
             val mg = s.unit.toMgdl(it)
-            if (mg in 20.0..600.0) Repo.addStick(Fingerstick(t, mg))
+            if (mg in 20.0..600.0) {
+                // P2-1: compare with the RAW sensor value (what calibration will pair it with).
+                val raw = Repo.db.readings(t - 10 * 60_000L).lastOrNull()?.mgdl
+                if (Calibration.isSuspicious(raw, mg)) suspectStick = raw!! to mg
+                else Repo.addStick(Fingerstick(t, mg))
+            }
         }
         Entry.INSULIN -> NumberDialog("💉 جرعة أنسولين سريع", "وحدات", { entry = null }) { saveDose(it) }
         Entry.CARBS -> NumberDialog("🍞 كربوهيدرات", "جرام", { entry = null }) { saveCarbs(it) }
         Entry.BOLUS -> BolusDialog(last?.mgdl, iob, forecast?.minutesToLow != null) { entry = null }
         null -> Unit
+    }
+    suspectStick?.let { (sensorMg, meterMg) ->
+        StickWarningDialog(sensorMg, meterMg, onSave = { Repo.addStick(Fingerstick(t, meterMg)); suspectStick = null },
+            onCancel = { suspectStick = null })
     }
 }
 
