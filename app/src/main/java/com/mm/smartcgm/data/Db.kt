@@ -79,6 +79,17 @@ class Db(ctx: Context, name: String = "smartcgm.db", private val localOnly: Bool
         } finally { db.endTransaction() }
     }
 
+    /** Carb and dose logging is all-or-nothing. A failed dose insert cannot leave a phantom meal. */
+    fun logBolus(timeMs: Long, carbs: Double, units: Double) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            if (carbs > 0) addCarbs(CarbEntry(timeMs, carbs))
+            if (units > 0) addDose(InsulinDose(timeMs, units))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     /** Returns false if a reading already exists within ±30 s (same value from two sources). */
     @Synchronized
     fun insertReading(r: GlucoseReading): Boolean {

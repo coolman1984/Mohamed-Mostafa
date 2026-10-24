@@ -17,6 +17,7 @@ real-device verification, sensor lifecycle bypass or real BLE codec activation i
 | Sensor chronology | Out-of-order backfill/duplicate/retired serial could change sensor clock | Persist before lifecycle, only advancing samples affect lifecycle, retired serial guard |
 | Calibration cache | Finger-stick before data cached identity, later data never invalidated fit | Invalidate after accepted raw sample; independent calibration per profile |
 | Dose eligibility | Unknown sensor age, restart suspicion, follower mode could use own therapy | Explicit eligibility blocks, pending restart gates, single dialog checks |
+| Confirmation race | New reading/IOB/profile could change between dialog check and DB writes | Single repository lock around revalidation and transactional meal+dose commit; stale manual entry is rejected |
 | Invalid input | NaN/Infinity survived numeric clamp; negative IOB/invalid target allowed unsafe advice | Finite settings fallback, invalid-input rejection, localized numeric parser; valid-dose equations unchanged |
 | Legacy corrupt logs | Previously stored negative/NaN medical entries contaminated totals/fit | Validation at storage and calculation boundaries; normal formulas unchanged and hand-worked tests retained |
 | Sound ownership | Snoozing HIGH or ordinary app resume stopped urgent-low sound | Per-alert sound acknowledgement; urgent requires explicit urgent acknowledgement |

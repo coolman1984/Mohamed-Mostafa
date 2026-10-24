@@ -145,8 +145,41 @@ object Repo {
     private var calCache: Calibration? = null
     private var calKey: Long = Long.MIN_VALUE
 
+    enum class BolusCommit { SAVED, CHANGED, UNAVAILABLE }
+
+    /** One lock covers eligibility, latest IOB/reading, displayed proposal comparison, and the DB transaction. */
     @Synchronized
-    fun addStick(s: com.mm.smartcgm.core.Fingerstick) {
+    fun confirmBolus(expected: AppSettings, shown: com.mm.smartcgm.core.BolusSuggestion, carbs: Double,
+                     now: Long = System.currentTimeMillis()): BolusCommit {
+        if (!isCurrent(expected) || (carbs != 0.0 && !SafeLimits.validCarbs(carbs))) return BolusCommit.UNAVAILABLE
+        val recent = dosingReadings(now)
+        if (recent.isEmpty()) return BolusCommit.UNAVAILABLE
+        val latestSettings = _settings.value
+        val next = com.mm.smartcgm.core.BolusAdvisor.suggest(carbs, recent.last().mgdl, iob(now), latestSettings.therapy,
+            com.mm.smartcgm.core.Prediction.forecast(recent, latestSettings.alerts.low.thresholdMgdl)?.minutesToLow != null)
+        if (next.totalUnits != shown.totalUnits || next.blockedForLow != shown.blockedForLow) return BolusCommit.CHANGED
+        db.logBolus(now, carbs, next.totalUnits)
+        touch()
+        return BolusCommit.SAVED
+    }
+
+    @Synchronized
+    fun logDose(expected: AppSettings, dose: com.mm.smartcgm.core.InsulinDose): Boolean =
+        withProfile(expected) {
+            if (expected.mode != AppMode.PATIENT || !SafeLimits.validDose(dose.units)) return@withProfile false
+            db.addDose(dose); touch(); true
+        } ?: false
+
+    @Synchronized
+    fun logCarbs(expected: AppSettings, carbs: com.mm.smartcgm.core.CarbEntry): Boolean =
+        withProfile(expected) {
+            if (expected.mode != AppMode.PATIENT || !SafeLimits.validCarbs(carbs.grams)) return@withProfile false
+            db.addCarbs(carbs); touch(); true
+        } ?: false
+
+    @Synchronized
+    fun addStick(s: com.mm.smartcgm.core.Fingerstick, expected: AppSettings = _settings.value) {
+        if (!isCurrent(expected) || expected.mode != AppMode.PATIENT || !s.mgdl.isFinite() || s.mgdl !in 20.0..600.0) return
         db.addStick(s)
         invalidateCalibration()
         touch()

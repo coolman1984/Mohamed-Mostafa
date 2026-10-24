@@ -136,12 +136,12 @@ fun HomeScreen() {
     fun saveDose(u: Double) {
         if (!SafeLimits.validDose(u)) { badEntry = "الجرعة لازم تكون أكبر من صفر ولحد ${SafeLimits.MAX_DOSE_U.toInt()} وحدة."; return }
         if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "dose", u) }
-        else { Repo.db.addDose(InsulinDose(t, u)); Repo.touch() }
+        else { Repo.logDose(s, InsulinDose(t, u)) }
     }
     fun saveCarbs(g: Double) {
         if (!SafeLimits.validCarbs(g)) { badEntry = "الكربوهيدرات لازم تكون أكبر من صفر ولحد ${SafeLimits.MAX_CARBS_G.toInt()} جرام."; return }
         if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "carbs", g) }
-        else { Repo.db.addCarbs(CarbEntry(t, g)); Repo.touch() }
+        else { Repo.logCarbs(s, CarbEntry(t, g)) }
     }
 
     when (entry) {
@@ -152,7 +152,7 @@ fun HomeScreen() {
                 // P2-1: compare with the RAW sensor value (what calibration will pair it with).
                 val raw = Repo.db.readings(t - 10 * 60_000L).lastOrNull()?.mgdl
                 if (Calibration.isSuspicious(raw, mg)) suspectStick = raw!! to mg
-                else Repo.addStick(Fingerstick(t, mg))
+                else Repo.addStick(Fingerstick(t, mg), s)
             }
         }
         Entry.INSULIN -> NumberDialog("💉 جرعة أنسولين سريع", "وحدات", { entry = null }) { saveDose(it) }
@@ -165,7 +165,7 @@ fun HomeScreen() {
             confirmButton = { TextButton(onClick = { badEntry = null }) { Text("حاضر") } })
     }
     suspectStick?.let { (sensorMg, meterMg) ->
-        StickWarningDialog(sensorMg, meterMg, onSave = { Repo.addStick(Fingerstick(t, meterMg)); suspectStick = null },
+        StickWarningDialog(sensorMg, meterMg, onSave = { Repo.addStick(Fingerstick(t, meterMg), s); suspectStick = null },
             onCancel = { suspectStick = null })
     }
 }
@@ -186,6 +186,7 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
     val iob = Repo.iob(now)
     val predictedLow = Prediction.forecast(eligible, s.alerts.low.thresholdMgdl)?.minutesToLow != null
     var carbs by remember { mutableStateOf(if (initialCarbs > 0) "%.0f".format(initialCarbs) else "") }
+    var submitted by remember { mutableStateOf(false) }
     val typed = com.mm.smartcgm.core.UserNumber.parse(carbs)
     // Out-of-range carbs (typo "600", negative, NaN) give no dose instead of a capped big one.
     val carbsOk = carbs.isBlank() || (typed != null && (typed == 0.0 || SafeLimits.validCarbs(typed)))
@@ -208,20 +209,12 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                // Recheck at confirmation: the dialog may have stayed open past freshness/lifecycle limits.
-                val t = System.currentTimeMillis()
-                val confirmed = Repo.dosingReadings(t)
-                if (confirmed.isEmpty()) { onDismiss(); return@TextButton }
-                if (!carbsOk) return@TextButton
-                val checked = BolusAdvisor.suggest(g, confirmed.last().mgdl, Repo.iob(t), Repo.settings.value.therapy,
-                    Prediction.forecast(confirmed, Repo.settings.value.alerts.low.thresholdMgdl)?.minutesToLow != null)
-                if (checked.totalUnits != sug.totalUnits || checked.blockedForLow != sug.blockedForLow) {
-                    Repo.touch() // refresh the displayed proposal before allowing another confirmation
-                    return@TextButton
+                if (submitted || !carbsOk) return@TextButton
+                when (Repo.confirmBolus(s, sug, g)) {
+                    Repo.BolusCommit.SAVED -> { submitted = true; onDismiss() }
+                    Repo.BolusCommit.CHANGED -> Repo.touch()
+                    Repo.BolusCommit.UNAVAILABLE -> onDismiss()
                 }
-                if (g > 0) Repo.db.addCarbs(CarbEntry(t, g))
-                if (sug.totalUnits > 0) Repo.db.addDose(InsulinDose(t, sug.totalUnits))
-                Repo.touch(); onDismiss()
             }) { Text("سجّل الأكل والجرعة") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إغلاق") } },

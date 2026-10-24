@@ -191,4 +191,32 @@ class DeepReviewIntegrationTest {
         receiver.onReceive(ctx, Intent(GlucoseBroadcastReceiver.JUGGLUCO).putExtra("glucodata.Minute.mgdl", 120))
         assertTrue(Repo.db.readings(0).isEmpty())
     }
+    @Test fun doseConfirmationRechecksCurrentDataInsideTheStorageBoundary() {
+        val t = now - MINUTE_MS
+        Repo.db.insertReading(GlucoseReading(t, 250.0, "juggluco"))
+        val expected = Repo.settings.value
+        // 60/10 + (250-110)/50 = 8.8, rounded down to 8.5.
+        val shown = BolusAdvisor.suggest(60.0, 250.0, 0.0, expected.therapy)
+        assertEquals(8.5, shown.totalUnits, 0.0)
+        Repo.db.insertReading(GlucoseReading(now, 50.0, "juggluco"))
+        assertEquals(Repo.BolusCommit.CHANGED, Repo.confirmBolus(expected, shown, 60.0))
+        assertTrue(Repo.db.doses(0).isEmpty())
+        assertTrue(Repo.db.carbs(0).isEmpty())
+    }
+
+    @Test fun staleManualEntryCannotWriteToANewProfile() {
+        val expected = Repo.settings.value
+        follow(pidA)
+        assertFalse(Repo.logDose(expected, InsulinDose(now, 4.0)))
+        assertFalse(Repo.logCarbs(expected, CarbEntry(now, 45.0)))
+        assertTrue(Repo.db.doses(0).isEmpty())
+        assertTrue(Repo.db.carbs(0).isEmpty())
+    }
+
+    @Test fun bolusDatabaseTransactionRollsBackMealWhenDoseInsertFails() {
+        Repo.db.writableDatabase.execSQL("CREATE TRIGGER reject_dose BEFORE INSERT ON doses BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+        try { Repo.db.logBolus(now, 60.0, 4.0); fail("Expected an insert failure") } catch (_: android.database.sqlite.SQLiteException) { }
+        assertTrue(Repo.db.carbs(0).isEmpty())
+        assertTrue(Repo.db.doses(0).isEmpty())
+    }
 }
