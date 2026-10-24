@@ -173,7 +173,7 @@ fun HomeScreen() {
 @Composable
 fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
     rememberRefreshKey()
-    val s = Repo.settings.value
+    val s by Repo.settings.collectAsState()
     val now = System.currentTimeMillis()
     val eligible = Repo.dosingReadings(now)
     if (eligible.isEmpty()) {

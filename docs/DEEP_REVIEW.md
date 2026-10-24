@@ -33,6 +33,7 @@ real-device verification, sensor lifecycle bypass or real BLE codec activation i
 | Customized report ranges | Fixed 70/180 labels and overlapping very-high categories for custom target >250 | Dynamic labels and mutually exclusive bins, hand-worked 3/6 in-range and 100% total test |
 | CSV export | Carriage-return / formula-prefixed text could create a second row or formula | Quote CR and neutralize formula prefixes |
 | Report coverage | 9-minute window could report 200% due floor slot count | Ceiling denominator; hand-worked 2/2 slot test |
+| UI settings observation | Seven composables read StateFlow values without subscribing | Collect settings as state so unit/config updates recompose immediately; strict lint checks this |
 | Build gate | Lint errors were non-blocking and APK triage tests omitted | Blocking lint, triage test stage, XML test-report artifacts |
 
 D1 batch contract verified against https://developers.cloudflare.com/d1/worker-api/d1-database/#batch

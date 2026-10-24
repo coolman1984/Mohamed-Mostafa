@@ -66,7 +66,7 @@ fun LogbookScreen() {
         LazyColumn {
             items(rows, key = { it.hourStartMs }) { r ->
                 Row(Modifier.fillMaxWidth().background(rangeColor(r.color)).padding(vertical = 6.dp)) {
-                    listOf(r.dayName, r.date, r.time, Logbook.value(r, Repo.settings.value.unit).ifEmpty { "—" }, r.events).forEachIndexed { i, it ->
+                    listOf(r.dayName, r.date, r.time, Logbook.value(r, s.unit).ifEmpty { "—" }, r.events).forEachIndexed { i, it ->
                         Text(it, Modifier.weight(if (i == 4) 1.6f else 1f), textAlign = TextAlign.Center,
                             fontSize = if (i == 4) 12.sp else androidx.compose.ui.unit.TextUnit.Unspecified)
                     }

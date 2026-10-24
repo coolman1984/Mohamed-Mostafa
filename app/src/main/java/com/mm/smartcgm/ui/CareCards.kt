@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -110,7 +111,8 @@ fun ClearSuspectCard() {
 /** P2-6 (patient side): a follower's proposal changes nothing until approved here. */
 @Composable
 fun ProposalCard(p: ThresholdProposal) {
-    val u = Repo.settings.value.unit
+    val observedSettings by Repo.settings.collectAsState()
+    val u = observedSettings.unit
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD))) {
         Column(Modifier.padding(14.dp)) {
@@ -128,7 +130,8 @@ fun ProposalCard(p: ThresholdProposal) {
 /** P2-1: asks before saving a finger-stick that is > 40% away from the sensor. */
 @Composable
 fun StickWarningDialog(sensorMgdl: Double, meterMgdl: Double, onSave: () -> Unit, onCancel: () -> Unit) {
-    val u = Repo.settings.value.unit
+    val observedSettings by Repo.settings.collectAsState()
+    val u = observedSettings.unit
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("⚠️ الفرق كبير بين الوخزة والحساس") },
@@ -145,7 +148,8 @@ fun StickWarningDialog(sensorMgdl: Double, meterMgdl: Double, onSave: () -> Unit
 /** P2-1: list of finger-sticks with delete, current slope/offset and "undo calibration". */
 @Composable
 fun CalibrationSection(refresh: Long) {
-    val u = Repo.settings.value.unit
+    val observedSettings by Repo.settings.collectAsState()
+    val u = observedSettings.unit
     val now = System.currentTimeMillis()
     val cal = remember(refresh) { Repo.calibration(now) }
     val sticks = remember(refresh) { Repo.db.sticks(now - 7 * DAY_MS).reversed() }
@@ -175,7 +179,7 @@ fun CalibrationSection(refresh: Long) {
 /** P2-6 (ADMIN follower side): send a proposal; it is validated here AND again on the patient's phone. */
 @Composable
 fun ProposeThresholdsSection() {
-    val s = Repo.settings.value
+    val s by Repo.settings.collectAsState()
     val u = s.unit
     var low by remember { mutableStateOf("") }
     var high by remember { mutableStateOf("") }
@@ -188,8 +192,8 @@ fun ProposeThresholdsSection() {
             OutlinedTextField(high, { high = it }, label = { Text("الارتفاع (${u.label})") }, singleLine = true, modifier = Modifier.weight(1f))
         }
         Button(onClick = {
-            val l = low.replace(',', '.').toDoubleOrNull()?.let(u::toMgdl)
-            val h = high.replace(',', '.').toDoubleOrNull()?.let(u::toMgdl)
+            val l = com.mm.smartcgm.core.UserNumber.parse(low)?.let(u::toMgdl)
+            val h = com.mm.smartcgm.core.UserNumber.parse(high)?.let(u::toMgdl)
             val p = if (l != null && h != null) ThresholdProposal(l, h, System.currentTimeMillis()) else null
             val problem = if (p == null) "اكتب الرقمين" else p.problem(s.alerts.urgentLowMgdl)
             if (problem != null) msg = "⚠️ $problem"

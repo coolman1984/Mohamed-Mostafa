@@ -56,7 +56,7 @@ fun AnalyticsScreen() {
         if (st == null) {
             Text("📭 مفيش قراءات كفاية لسه.", Modifier.padding(16.dp)); return@Column
         }
-        val u = Repo.settings.value.unit
+        val u = s.unit
         SectionCard("🎯 الوقت في النطاق (${u.format(s.therapy.lowMgdl)}–${u.format(s.therapy.highMgdl)})") {
             TirBar(st.veryLowPct, st.lowPct, st.inRangePct, st.highPct, st.veryHighPct)
             Text("🟢 في النطاق: %.0f%%  (الهدف أكتر من 70%%)".format(st.inRangePct), fontWeight = FontWeight.Bold)
