@@ -73,4 +73,16 @@ class DeepReviewTest {
         assertEquals(4.0, InsulinMath.iob(listOf(InsulinDose(now, 4.0), InsulinDose(now, -4.0), InsulinDose(now, Double.NaN)), now, 4.0))
         assertEquals(Calibration(1.0, 20.0), Calibration.fit(listOf(100.0 to 120.0, Double.NaN to 120.0)))
     }
+    @Test fun customRangeCategoriesAreExclusiveAndCoverExactlyOneHundredPercent() {
+        val readings = listOf(50.0, 60.0, 100.0, 200.0, 275.0, 350.0).map { GlucoseReading(1000, it) }
+        val st = Stats.compute(readings, 80.0, 300.0)!!
+        assertEquals(50.0, st.inRangePct) // 100, 200, 275: 3 of 6
+        assertEquals(100.0, st.veryLowPct + st.lowPct + st.inRangePct + st.highPct + st.veryHighPct, 1e-9)
+    }
+
+    @Test fun csvCarriageReturnsAndFormulaPrefixesAreContained() {
+        val row = LogRow(1000, "Monday", "01/01/26", "1", 120, null, "=1+1\rnext")
+        val csv = Logbook.toCsv(listOf(row))
+        assertTrue(csv.contains("\"'=1+1\rnext\""))
+    }
 }

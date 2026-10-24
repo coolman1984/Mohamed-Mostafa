@@ -83,7 +83,11 @@ object Logbook {
         rows.forEach { append("${it.dayName},${it.date},${it.time},${value(it, unit)},${csvCell(it.events)}\n") }
     }
 
-    private fun csvCell(s: String) = if (s.any { it == ',' || it == '"' || it == '\n' }) "\"" + s.replace("\"", "\"\"") + "\"" else s
+    private fun csvCell(s: String): String {
+        val safe = if (s.trimStart().firstOrNull() in listOf('=', '+', '-', '@')) "'" + s else s
+        return if (safe.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
+            "\"" + safe.replace("\"", "\"\"") + "\"" else safe
+    }
 
     /** Turns the logged doses, carbs and meds into table events. */
     fun events(doses: List<InsulinDose>, carbs: List<CarbEntry>, meds: List<MedicationEntry>): List<LogEvent> =

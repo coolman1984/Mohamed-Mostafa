@@ -271,7 +271,10 @@ export async function handle(req, env, now = Date.now()) {
         const n = await db.prepare('SELECT COUNT(*) AS n FROM events WHERE patient = ?').bind(pid).first();
         if (n.n >= LIMITS.MAX_EVENTS) return err(429, 'too many pending events');
         const t = Number.isInteger(b.time) && Math.abs(b.time - now) < 86400_000 ? b.time : now;
-        await db.prepare('INSERT INTO events (patient, type, value, t) VALUES (?,?,?,?)').bind(pid, b.type, b.value, t).run();
+        const inserted = await db.prepare(`INSERT INTO events (patient, type, value, t)
+          SELECT ?1, ?2, ?3, ?4 WHERE (SELECT COUNT(*) FROM events WHERE patient = ?1) < ?5`)
+          .bind(pid, b.type, b.value, t, LIMITS.MAX_EVENTS).run();
+        if (changes(inserted) !== 1) return err(429, 'too many pending events');
         return json({ ok: true }, 201);
       }
       if (m === 'GET') {

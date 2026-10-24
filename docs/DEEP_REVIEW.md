@@ -29,6 +29,8 @@ real-device verification, sensor lifecycle bypass or real BLE codec activation i
 | AI response | Invalid/non-finite nutrition or model path could enter dose UI / leak response details | Model allowlist, bounded response, numeric range validation, generic errors |
 | Invite race | Concurrent redeems could both consume same one-time invite | Guarded insert and conditional consume in atomic D1 batch; 12-way regression |
 | Owner race | Concurrent claims could both become owner | Conditional atomic insert; concurrent claim regression |
+| Customized report ranges | Fixed 70/180 labels and overlapping very-high categories for custom target >250 | Dynamic labels and mutually exclusive bins, hand-worked 3/6 in-range and 100% total test |
+| CSV export | Carriage-return / formula-prefixed text could create a second row or formula | Quote CR and neutralize formula prefixes |
 | Report coverage | 9-minute window could report 200% due floor slot count | Ceiling denominator; hand-worked 2/2 slot test |
 | Build gate | Lint errors were non-blocking and APK triage tests omitted | Blocking lint, triage test stage, XML test-report artifacts |
 

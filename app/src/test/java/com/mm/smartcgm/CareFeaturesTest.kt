@@ -170,7 +170,8 @@ class CareFeaturesTest {
         Repo.decideProposal(false)
         assertNull(Repo.pendingProposal())
         assertEquals(before, Repo.settings.value.alerts)
-        Repo.receiveProposal(ThresholdProposal(80.0, 200.0, now))
+        assertFalse(Repo.receiveProposal(ThresholdProposal(80.0, 200.0, now))) // declined proposal cannot replay
+        assertTrue(Repo.receiveProposal(ThresholdProposal(80.0, 200.0, now + 1))) // a new proposal
         Repo.decideProposal(true)
         val a = Repo.settings.value.alerts
         assertEquals(80.0, a.low.thresholdMgdl, 0.0)

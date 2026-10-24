@@ -24,8 +24,9 @@ data class AgpHour(val hour: Int, val p5: Double, val p25: Double, val p50: Doub
 object Stats {
 
     fun compute(readings: List<GlucoseReading>, low: Double = 70.0, high: Double = 180.0): GlucoseStats? {
-        if (readings.isEmpty()) return null
-        val v = readings.map { it.mgdl }
+        if (!low.isFinite() || !high.isFinite() || low >= high) return null
+        val v = readings.map { it.mgdl }.filter { it.isFinite() && it in 20.0..600.0 }
+        if (v.isEmpty()) return null
         val n = v.size.toDouble()
         val mean = v.average()
         val sd = sqrt(v.sumOf { (it - mean) * (it - mean) } / n)
@@ -35,11 +36,11 @@ object Stats {
             meanMgdl = mean,
             gmiPercent = 3.31 + 0.02392 * mean,
             cvPercent = if (mean == 0.0) 0.0 else sd / mean * 100,
-            veryLowPct = pct { it < 54 },
-            lowPct = pct { it >= 54 && it < low },
+            veryLowPct = pct { it < minOf(54.0, low) },
+            lowPct = pct { it >= minOf(54.0, low) && it < low },
             inRangePct = pct { it >= low && it <= high },
-            highPct = pct { it > high && it <= 250 },
-            veryHighPct = pct { it > 250 },
+            highPct = pct { it > high && it <= maxOf(250.0, high) },
+            veryHighPct = pct { it > maxOf(250.0, high) },
         )
     }
 

@@ -26,9 +26,9 @@ import java.net.URL
  */
 object CloudSync {
 
-    private fun key(s: AppSettings, purpose: String): String = purpose + ":" +
+    private fun key(s: AppSettings, purpose: String, credentials: Boolean = true): String = purpose + ":" +
         java.security.MessageDigest.getInstance("SHA-256").digest(
-            "${s.backendUrl.trimEnd('/')}|${s.activeAccountCode}|${s.activeToken}".toByteArray())
+            ("${s.backendUrl.trimEnd('/')}|${s.activeAccountCode}" + if (credentials) "|${s.activeToken}" else "").toByteArray())
             .joinToString("") { "%02x".format(it) }
     private fun current(s: AppSettings) = Repo.isCurrent(s)
 
@@ -227,7 +227,7 @@ object CloudSync {
             val type = e.optString("type")
             val value = e.optDouble("value", Double.NaN)
             val stored = Repo.withProfile(s) {
-                val added = Repo.db.importRemoteEvent(key(s, "event:$id"), type, value, t)
+                val added = Repo.db.importRemoteEvent(key(s, "event:$id", credentials = false), type, value, t)
                 if (added) Repo.touch()
                 true
             } ?: return

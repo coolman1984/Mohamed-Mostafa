@@ -186,3 +186,13 @@ test('legacy responses never remove trust or age from experimental rows', async 
   assert.deepEqual((await call('GET', `/v1/p/${PID}/readings`, { token: OWNER })).body.readings, [[t - 120000, 100]]);
   assert.equal((await call('GET', `/v1/p/${PID}/readings?format=full`, { token: OWNER })).body.readings.length, 3);
 });
+
+test('concurrent admin events cannot exceed the pending queue limit', async () => {
+  const { call } = setup();
+  const admin = await withFollower(call, 'ADMIN');
+  const responses = await Promise.all(Array.from({ length: 70 }, () => call('POST', `/v1/p/${PID}/events`, {
+    token: admin, body: { type: 'carbs', value: 10 },
+  })));
+  assert.equal(responses.filter((r) => r.status === 201).length, 50);
+  assert.equal((await call('GET', `/v1/p/${PID}/events`, { token: OWNER })).body.events.length, 50);
+});

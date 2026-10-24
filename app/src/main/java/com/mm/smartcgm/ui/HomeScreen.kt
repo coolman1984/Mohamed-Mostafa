@@ -59,8 +59,8 @@ fun HomeScreen() {
     val sensor = remember(key) { Repo.sensorStatus(now) }
     val iob = remember(key) { Repo.iob(now) }
     val cob = remember(key) { Repo.cob(now) }
-    var entry by remember { mutableStateOf<Entry?>(null) }
-    var suspectStick by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var entry by remember(Repo.profile) { mutableStateOf<Entry?>(null) }
+    var suspectStick by remember(Repo.profile) { mutableStateOf<Pair<Double, Double>?>(null) }
     var badEntry by remember { mutableStateOf<String?>(null) }
     val follower = s.mode == AppMode.FOLLOWER
     val canEdit = !follower || s.followRole == FollowerRole.ADMIN
