@@ -87,12 +87,13 @@ class ScreensTest {
         shot("01-home") { HomeScreen() }
         assertTrue(has("متوقع هبوط"))
         assertTrue(has("البيانات بتوصل كويس"))
-        assertTrue(has("غيّر") || has("15"))
+        assertTrue(has("فاضل"))
     }
 
     @Test fun extendedSensorShowsNonActionableWarningInsteadOfClinicalForecast() {
         shot("01b-home-extended") { HomeScreen() }
         assertTrue(has("غير معتمدة للجرعات"))
+        assertTrue(has("غيّر") || has("15"))
         assertFalse(has("متوقع هبوط"))
     }
 
