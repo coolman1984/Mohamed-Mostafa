@@ -105,6 +105,8 @@ object Exporter {
         var y = 50f
         fun line(s: String, p: Paint = t) { c.drawText(s, w - 40f, y, p); y += p.textSize + 8 }
         line("تقرير AGP للطبيب — آخر $days يوم", b)
+        if (Repo.sensorStatus()?.phase == com.mm.smartcgm.core.SensorPhase.EXTENDED || Repo.settings.value.clearSuspectMs > 0)
+            line("⚠ بيانات الحساس بعد عمره المحدد أو إعادة تشغيله غير معتمدة طبيًا.")
         // One fact per line: mixing Arabic, numbers and Latin on one canvas line scrambles the bidi order.
         val ok = Stats.meetsConsensus(coveragePct, days)
         listOf(
@@ -151,6 +153,10 @@ object Exporter {
             val c = page.canvas
             c.drawText(title, w / 2f, y, bold.apply { textSize = 15f }); bold.textSize = 12f
             y += 22
+            if (pageNo == 1 && (Repo.sensorStatus()?.phase == com.mm.smartcgm.core.SensorPhase.EXTENDED || Repo.settings.value.clearSuspectMs > 0)) {
+                c.drawText("⚠ بيانات الحساس بعد عمره المحدد أو إعادة تشغيله غير معتمدة طبيًا.", w / 2f, y, small)
+                y += 16
+            }
             if (pageNo == 1 && stats != null) {
                 c.drawText("في النطاق %.0f%%  •  تحت %.0f%%  •  فوق %.0f%%  •  المتوسط %s  •  GMI %.1f%%".format(
                     stats.inRangePct, stats.lowPct + stats.veryLowPct, stats.highPct + stats.veryHighPct,

@@ -57,7 +57,7 @@ object Pipeline {
         val now = System.currentTimeMillis()
         val s = Repo.settings.value
         if (s.mode == AppMode.FOLLOWER && s.followRole != FollowerRole.ADMIN) return@synchronized
-        val recent = ClinicalGate.forDosing(Repo.readings(now - HOUR_MS, now))
+        val recent = Repo.alarmReadings(now)
         val forecast = Prediction.forecast(recent, s.alerts.low.thresholdMgdl)
         val (alerts, next) = AlertEngine.evaluate(ClinicalGate.forAlarm(recent, now, s.alerts.staleMinutes * 60_000L), forecast, Repo.sensorStatus(now),
             s.alerts.copy(unit = s.unit), alertState, now)

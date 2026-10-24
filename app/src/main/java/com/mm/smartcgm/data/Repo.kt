@@ -262,6 +262,15 @@ object Repo {
             .map { it.copy(mgdl = cal.apply(it.mgdl)) }
     }
 
+    /** Known expired/restarted sensor values are not a clinical alarm input. Existing urgent sound is never auto-cleared. */
+    @Synchronized
+    fun alarmReadings(now: Long = System.currentTimeMillis()): List<GlucoseReading> {
+        val current = _settings.value
+        val phase = sensorStatus(now)?.phase
+        if (current.clearSuspectMs > 0 || phase == SensorPhase.EXTENDED || phase == SensorPhase.EXPIRED) return emptyList()
+        return ClinicalGate.forDosing(readings(now - HOUR_MS, now))
+    }
+
     /** Eligibility gate used by every dose entry point; never falls back to meal-only advice. */
     @Synchronized
     fun dosingReadings(now: Long = System.currentTimeMillis()): List<GlucoseReading> {

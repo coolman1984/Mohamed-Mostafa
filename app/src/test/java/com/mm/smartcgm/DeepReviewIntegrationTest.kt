@@ -219,4 +219,12 @@ class DeepReviewIntegrationTest {
         assertTrue(Repo.db.carbs(0).isEmpty())
         assertTrue(Repo.db.doses(0).isEmpty())
     }
+    @Test fun extendedOrRestartedSensorCannotBecomeTheOnlyClinicalAlarmInput() {
+        Repo.db.insertReading(GlucoseReading(now - MINUTE_MS, 50.0, "juggluco"))
+        assertFalse(Repo.alarmReadings().isEmpty())
+        Repo.updateSettings { it.copy(sensorStartMs = now - 16 * DAY_MS) }
+        assertTrue(Repo.alarmReadings().isEmpty())
+        Repo.updateSettings { it.copy(sensorStartMs = now - 2 * DAY_MS, clearSuspectMs = now) }
+        assertTrue(Repo.alarmReadings().isEmpty())
+    }
 }
