@@ -20,7 +20,13 @@
 | `backend/` | سيرفر المشاركة على Cloudflare Workers + D1 (مجاني) |
 
 ## ⬇️ تنزيل الـAPK
-كل رفع على GitHub بيبني APK أوتوماتيك: **Actions ← Build APK ← SmartCGM-apk**.
+**لينك مباشر (Cloudflare):** https://smartcgm-download.mflma2040.workers.dev/SmartCGM.apk
+
+افتحه من الموبايل وهينزل الملف على طول. النسخة الحالية مبنية من `main` (commit `bd98acd`)،
+SHA-256: `47f495ccfb05dba95c2dd61bd48af8225ee3d927c7513ee912de585989067fb8` (الهيدر `X-SHA256` بيرجع نفس القيمة).
+
+كل رفع على GitHub بيبني APK أوتوماتيك كمان: **Actions ← Build APK ← SmartCGM-apk**.
+اللينك ده لسه مش بيتحدّث لوحده مع كل بناء؛ ده محتاج secret اسمه `CLOUDFLARE_API_TOKEN` في الريبو (مش موجود حاليًا).
 
 ## 🧪 تشغيل الاختبارات
 ```
