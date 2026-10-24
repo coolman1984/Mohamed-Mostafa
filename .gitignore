@@ -7,3 +7,12 @@ local.properties
 captures/
 *.apk
 *.keystore
+
+# LinX RE — never commit proprietary/private material
+private-findings/
+*.apk
+*.hci
+*.snoop
+*.btsnoop*
+docs/linx-re-evidence/raw/
+__pycache__/

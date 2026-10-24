@@ -1,14 +1,37 @@
 package com.mm.smartcgm.core
 
+/**
+ * How much we trust a reading for clinical decisions.
+ *  - TRUSTED: verified sources (Juggluco, official-app notification, finger-stick-calibrated history).
+ *  - EXPERIMENTAL: the direct-BLE LinX source until it is verified on the owner's own phone+sensor
+ *    against an accepted reference. It may be shown (clearly labelled) but must never feed bolus advice
+ *    nor be the only source behind a life-critical alarm. See ClinicalGate.
+ */
+enum class ReadingTrust {
+    TRUSTED, EXPERIMENTAL;
+
+    companion object {
+        /** Single source of truth: the direct-BLE LinX source is experimental; everything else is trusted.
+         *  Deriving trust from the source string makes it survive storage/reload with no extra DB column. */
+        fun of(source: String): ReadingTrust =
+            if (source == "linx-ble" || source.startsWith("linx-ble:")) EXPERIMENTAL else TRUSTED
+    }
+}
+
 /** One glucose value in mg/dL at an epoch-millis timestamp. */
 data class GlucoseReading(
     val timeMs: Long,
     val mgdl: Double,
-    /** Where it came from: "juggluco", "linx-app", "nightscout", "manual"... */
+    /** Where it came from: "juggluco", "linx-app", "linx-ble", "nightscout", "manual"... */
     val source: String = "unknown",
     /** Sensor serial when the source reports one. */
     val sensorId: String? = null,
-)
+    /** Clinical trust level. Defaults to TRUSTED so existing sources are unchanged. */
+    val trust: ReadingTrust = ReadingTrust.TRUSTED,
+) {
+    /** A copy whose trust is re-derived from [source] — used when rebuilding a reading from storage. */
+    fun withDerivedTrust(): GlucoseReading = copy(trust = ReadingTrust.of(source))
+}
 
 /** A finger-stick (meter) value used for calibration. */
 data class Fingerstick(val timeMs: Long, val mgdl: Double)

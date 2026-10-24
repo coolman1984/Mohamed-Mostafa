@@ -56,7 +56,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
     fun readings(fromMs: Long, toMs: Long = Long.MAX_VALUE): List<GlucoseReading> =
         readableDatabase.rawQuery("SELECT time, mgdl, source, sensor FROM readings WHERE time BETWEEN ? AND ? ORDER BY time",
             arrayOf(fromMs.toString(), toMs.toString())).use { c ->
-            buildList { while (c.moveToNext()) add(GlucoseReading(c.getLong(0), c.getDouble(1), c.getString(2) ?: "", c.getString(3))) }
+            buildList { while (c.moveToNext()) add(GlucoseReading(c.getLong(0), c.getDouble(1), c.getString(2) ?: "", c.getString(3)).withDerivedTrust()) }
         }
 
     fun addStick(s: Fingerstick) {
