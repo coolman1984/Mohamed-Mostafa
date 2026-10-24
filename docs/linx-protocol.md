@@ -13,7 +13,7 @@ investigation; it does not assert a protocol.
 
 What is built and testable today (no device needed):
 - `core/BleReadingValidator` — range/units/clock/dedup gate for any decoded reading (tested).
-- `core/ClinicalGate` — keeps experimental readings out of dosing and out of being the sole alarm (tested).
+- `core/ClinicalGate` — keeps experimental readings out of clinical consumers; integrated via quarantine + dose/alarm gates.
 - `sources/linx/*` — the read-only source boundary, disabled until a verified codec is wired in.
 
 ## Evidence table (to be completed from the owner's authorized capture)

@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mm.smartcgm.cloud.CloudSync
+import com.mm.smartcgm.core.BleReadingValidator
 import com.mm.smartcgm.core.BolusAdvisor
 import com.mm.smartcgm.core.Calibration
 import com.mm.smartcgm.core.CarbEntry
@@ -72,6 +73,13 @@ fun HomeScreen() {
         if (!follower && s.newSensorSuspectMs > 0) NewSensorPrompt()
         val proposal = remember(key) { if (!follower) Repo.pendingProposal() else null }
         proposal?.let { ProposalCard(it) }
+        val experimental = remember(key) { Repo.db.experimentalReadings(now - 3 * HOUR_MS).lastOrNull() }
+        experimental?.let {
+            SectionCard("🧪 قراءة تجريبية منفصلة") {
+                Text("${s.unit.formatWithUnit(it.mgdl)} — غير معتمدة للجرعات أو التنبيهات الطبية", color = Orange)
+                Text(if (BleReadingValidator.isStale(it, now)) "⚠️ آخر قراءة قديمة، مش قراءة حية" else "للمقارنة والاختبار فقط — اتأكد بقياس الإصبع")
+            }
+        }
         // Big current value
         val color = last?.let { colorFor(it.mgdl, s.therapy.lowMgdl, s.therapy.highMgdl) } ?: Color.Gray
         Card(Modifier.fillMaxWidth().padding(12.dp), colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.12f))) {
@@ -85,6 +93,7 @@ fun HomeScreen() {
                         Text(" ${arrow.symbol}", fontSize = 56.sp, color = color)
                     }
                     Text("${s.unit.label} • ${arrow.arabic}")
+                    if (BleReadingValidator.isStale(last, now)) Text("⚠️ آخر قراءة معروفة — البيانات مش حية", color = Red)
                     val ago = (now - last.timeMs) / 60_000
                     Text(if (ago < 1) "🕐 دلوقتي" else "🕐 من $ago دقيقة", style = MaterialTheme.typography.bodySmall)
                 }
@@ -138,7 +147,7 @@ fun HomeScreen() {
         }
         Entry.INSULIN -> NumberDialog("💉 جرعة أنسولين سريع", "وحدات", { entry = null }) { saveDose(it) }
         Entry.CARBS -> NumberDialog("🍞 كربوهيدرات", "جرام", { entry = null }) { saveCarbs(it) }
-        Entry.BOLUS -> BolusDialog(last?.mgdl, iob, forecast?.minutesToLow != null) { entry = null }
+        Entry.BOLUS -> BolusDialog { entry = null }
         null -> Unit
     }
     suspectStick?.let { (sensorMg, meterMg) ->
@@ -148,8 +157,20 @@ fun HomeScreen() {
 }
 
 @Composable
-fun BolusDialog(currentMgdl: Double?, iob: Double, predictedLow: Boolean, initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
+fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
+    rememberRefreshKey()
     val s = Repo.settings.value
+    val now = System.currentTimeMillis()
+    val eligible = Repo.dosingReadings(now)
+    if (eligible.isEmpty()) {
+        AlertDialog(onDismissRequest = onDismiss, title = { Text("⚠️ حساب الجرعة متوقف") },
+            text = { Text("لازم قراءة حديثة من مصدر موثوق وحساس داخل عمره المحدد. القراءات التجريبية أو القديمة مش مناسبة لحساب الجرعة.") },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("إغلاق") } })
+        return
+    }
+    val currentMgdl = eligible.last().mgdl
+    val iob = Repo.iob(now)
+    val predictedLow = Prediction.forecast(eligible, s.alerts.low.thresholdMgdl)?.minutesToLow != null
     var carbs by remember { mutableStateOf(if (initialCarbs > 0) "%.0f".format(initialCarbs) else "") }
     val g = carbs.replace(',', '.').toDoubleOrNull() ?: 0.0
     val sug = BolusAdvisor.suggest(g, currentMgdl, iob, s.therapy, predictedLow)
@@ -169,7 +190,16 @@ fun BolusDialog(currentMgdl: Double?, iob: Double, predictedLow: Boolean, initia
         },
         confirmButton = {
             TextButton(onClick = {
+                // Recheck at confirmation: the dialog may have stayed open past freshness/lifecycle limits.
                 val t = System.currentTimeMillis()
+                val confirmed = Repo.dosingReadings(t)
+                if (confirmed.isEmpty()) { onDismiss(); return@TextButton }
+                val checked = BolusAdvisor.suggest(g, confirmed.last().mgdl, Repo.iob(t), Repo.settings.value.therapy,
+                    Prediction.forecast(confirmed, Repo.settings.value.alerts.low.thresholdMgdl)?.minutesToLow != null)
+                if (checked.totalUnits != sug.totalUnits || checked.blockedForLow != sug.blockedForLow) {
+                    Repo.touch() // refresh the displayed proposal before allowing another confirmation
+                    return@TextButton
+                }
                 if (g > 0) Repo.db.addCarbs(CarbEntry(t, g))
                 if (sug.totalUnits > 0) Repo.db.addDose(InsulinDose(t, sug.totalUnits))
                 Repo.touch(); onDismiss()

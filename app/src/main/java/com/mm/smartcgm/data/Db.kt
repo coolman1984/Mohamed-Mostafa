@@ -11,6 +11,7 @@ import com.mm.smartcgm.core.GlucoseReading
 import com.mm.smartcgm.core.InsulinDose
 import com.mm.smartcgm.core.InsulinKind
 import com.mm.smartcgm.core.MedicationEntry
+import com.mm.smartcgm.core.ReadingTrust
 
 /** Local store. Readings keep the RAW sensor value; calibration is applied on read. */
 class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) {
@@ -22,14 +23,22 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         db.execSQL("CREATE TABLE carbs(time INTEGER, grams REAL, note TEXT)")
         db.execSQL("CREATE TABLE meds(time INTEGER, name TEXT, ingredient TEXT, effect TEXT)")
         createIndexes(db)
+        createExperimentalTable(db)
     }
 
     /**
      * Schema plan: v1 = initial tables. v2 = time indexes on doses/carbs/meds (readings/sticks are already keyed by
-     * time). Every future change gets its own `if (oldVersion < N)` block; never drop user data in a migration.
+     * time). v3 = separate experimental timeline. Every future change gets its own `if (oldVersion < N)` block; never drop user data in a migration.
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createIndexes(db)
+        if (oldVersion < 3) {
+            createExperimentalTable(db)
+            // Relocate earlier scaffold samples atomically; preserve every original value.
+            val experimental = "(lower(replace(source, '_', '-')) = 'linx-ble' OR lower(replace(source, '_', '-')) LIKE 'linx-ble:%')"
+            db.execSQL("INSERT OR IGNORE INTO experimental_readings SELECT time, mgdl, source, sensor FROM readings WHERE $experimental")
+            db.execSQL("DELETE FROM readings WHERE $experimental")
+        }
     }
 
     private fun createIndexes(db: SQLiteDatabase) {
@@ -38,25 +47,38 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         db.execSQL("CREATE INDEX IF NOT EXISTS meds_time ON meds(time)")
     }
 
-    companion object { const val DB_VERSION = 2 }
+    private fun createExperimentalTable(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS experimental_readings(time INTEGER PRIMARY KEY, mgdl REAL, source TEXT, sensor TEXT)")
+    }
+
+    companion object { const val DB_VERSION = 3 }
 
     /** Returns false if a reading already exists within ±30 s (same value from two sources). */
+    @Synchronized
     fun insertReading(r: GlucoseReading): Boolean {
         val db = writableDatabase
-        db.rawQuery("SELECT 1 FROM readings WHERE time BETWEEN ? AND ? LIMIT 1",
+        val table = if (r.withDerivedTrust().trust == ReadingTrust.EXPERIMENTAL) "experimental_readings" else "readings"
+        db.rawQuery("SELECT 1 FROM $table WHERE time BETWEEN ? AND ? LIMIT 1",
             arrayOf((r.timeMs - 30_000).toString(), (r.timeMs + 30_000).toString())).use {
             if (it.moveToFirst()) return false
         }
-        db.insert("readings", null, ContentValues().apply {
+        return db.insert(table, null, ContentValues().apply {
             put("time", r.timeMs); put("mgdl", r.mgdl); put("source", r.source); put("sensor", r.sensorId)
-        })
-        return true
+        }) != -1L
     }
 
     fun readings(fromMs: Long, toMs: Long = Long.MAX_VALUE): List<GlucoseReading> =
         readableDatabase.rawQuery("SELECT time, mgdl, source, sensor FROM readings WHERE time BETWEEN ? AND ? ORDER BY time",
             arrayOf(fromMs.toString(), toMs.toString())).use { c ->
             buildList { while (c.moveToNext()) add(GlucoseReading(c.getLong(0), c.getDouble(1), c.getString(2) ?: "", c.getString(3)).withDerivedTrust()) }
+        }
+
+    /** Isolated experiment timeline; never returned by readings() or lastReadingTime(). */
+    fun experimentalReadings(fromMs: Long): List<GlucoseReading> =
+        readableDatabase.rawQuery("SELECT time, mgdl, source, sensor FROM experimental_readings WHERE time >= ? ORDER BY time",
+            arrayOf(fromMs.toString())).use { c ->
+            buildList { while (c.moveToNext()) add(GlucoseReading(c.getLong(0), c.getDouble(1), c.getString(2) ?: "",
+                c.getString(3), ReadingTrust.EXPERIMENTAL)) }
         }
 
     fun addStick(s: Fingerstick) {

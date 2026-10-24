@@ -70,16 +70,16 @@ private val SOURCE_NAMES = linkedMapOf(
     "notification" to "إشعار تطبيق الحساس",
 )
 
-/** AGENTS.md P0-4: which source is alive, and a red banner when nothing arrived for 10 minutes. */
+/** AGENTS.md P0-4: which source is alive, and a red banner when nothing arrived for 5 minutes. */
 @Composable
 fun SourceHealthCard(lastReadingMs: Long?, now: Long) {
     val s by Repo.settings.collectAsState()
-    val stale = lastReadingMs == null || now - lastReadingMs > 10 * 60_000L
+    val stale = lastReadingMs == null || now - lastReadingMs > 5 * 60_000L
     val red = Color(0xFFC62828)
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(containerColor = if (stale) red.copy(alpha = 0.12f) else Color(0x112E7D32))) {
         Column(Modifier.padding(12.dp)) {
-            if (stale) Text("⚠️ مفيش قراءات وصلت من أكتر من 10 دقايق — راجع Juggluco أو تطبيق الحساس.", color = red, fontWeight = FontWeight.Bold)
+            if (stale) Text("⚠️ مفيش قراءات وصلت من أكتر من 5 دقايق — راجع Juggluco أو تطبيق الحساس.", color = red, fontWeight = FontWeight.Bold)
             else Text("✅ البيانات بتوصل كويس", fontWeight = FontWeight.Bold)
             SOURCE_NAMES.forEach { (key, name) ->
                 val t = Repo.sourceSeen[key]

@@ -24,7 +24,7 @@ class LinxBleSource(
     private val ingest: (GlucoseReading) -> Unit,
     private val codec: LinxFrameCodec = LinxFrameCodec.UNEVIDENCED,
 ) {
-    @Volatile private var lastAcceptedMs: Long? = null
+    private val lastAcceptedBySensor = mutableMapOf<String, Long>()
 
     /** True only when a verified codec is wired in. Until then the source stays off. */
     fun isAvailable(): Boolean = codec !== LinxFrameCodec.UNEVIDENCED
@@ -35,7 +35,9 @@ class LinxBleSource(
      * Any decode failure is swallowed into a reason string — a codec bug can never crash the service
      * nor masquerade as a glucose value.
      */
+    @Synchronized
     fun onFrame(frame: ByteArray, nowMs: Long = System.currentTimeMillis(), sensorId: String?): String? {
+        if (sensorId.isNullOrBlank()) return "sensor-identity-unavailable"
         val raw = try {
             codec.decodeReading(frame)
         } catch (e: ProtocolNotEvidenced) {
@@ -43,12 +45,12 @@ class LinxBleSource(
         } catch (e: Exception) {
             return "decode-error"
         }
-        // Sensor-relative → wall clock is itself evidence-gated; until verified, trust the arrival time.
-        val timeMs = nowMs
-        return when (val r = BleReadingValidator.validate(raw.mgdl, timeMs, nowMs, sensorId, lastAcceptedMs, "linx-ble")) {
+        // Arrival time cannot establish freshness or deduplication for replayed/history frames.
+        val timeMs = raw.timeMs ?: return "sensor-clock-unmapped"
+        return when (val r = BleReadingValidator.validate(raw.mgdl, timeMs, nowMs, sensorId, lastAcceptedBySensor[sensorId], "linx-ble")) {
             is BleReadingValidator.Result.Ok -> {
                 check(r.reading.trust == ReadingTrust.EXPERIMENTAL) { "linx-ble reading must be experimental" }
-                lastAcceptedMs = r.reading.timeMs
+                lastAcceptedBySensor[sensorId] = r.reading.timeMs
                 ingest(r.reading)
                 null
             }

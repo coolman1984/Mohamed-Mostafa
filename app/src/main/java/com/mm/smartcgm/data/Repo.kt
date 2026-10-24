@@ -1,6 +1,10 @@
 package com.mm.smartcgm.data
 
 import android.content.Context
+import com.mm.smartcgm.core.ClinicalGate
+import com.mm.smartcgm.core.ReadingTrust
+import com.mm.smartcgm.core.SensorPhase
+import com.mm.smartcgm.core.BleReadingValidator
 import com.mm.smartcgm.core.Calibration
 import com.mm.smartcgm.core.DAY_MS
 import com.mm.smartcgm.core.GlucoseReading
@@ -45,7 +49,14 @@ object Repo {
 
     @Synchronized
     fun ingest(reading: GlucoseReading) {
-        if (reading.mgdl < 20 || reading.mgdl > 600) return
+        if (!reading.mgdl.isFinite() || reading.mgdl < 20 || reading.mgdl > 600) return
+        if (reading.timeMs <= 0) return
+        if (reading.withDerivedTrust().trust == ReadingTrust.EXPERIMENTAL) {
+            // Quarantine before lifecycle, calibration, source health, alarms or cloud side effects.
+            if (reading.timeMs > System.currentTimeMillis()) return
+            if (db.insertReading(reading)) touch()
+            return
+        }
         if (reading.timeMs > System.currentTimeMillis() + 5 * 60_000) return
         val s = _settings.value
         // A new sensor serial means a new sensor: restart the 15/20-day clock.
@@ -142,7 +153,7 @@ object Repo {
         calCache?.takeIf { calKey == key }?.let { return it }
         val sticks = db.sticks(now - 7 * DAY_MS)
         val fit = if (sticks.isEmpty()) Calibration.IDENTITY
-        else Calibration.fit(Calibration.pair(db.readings(now - 7 * DAY_MS - HOUR_MS), sticks))
+        else Calibration.fit(Calibration.pair(ClinicalGate.forDosing(db.readings(now - 7 * DAY_MS - HOUR_MS)), sticks))
         calCache = fit; calKey = key
         fit
     }
@@ -155,9 +166,18 @@ object Repo {
         val st = sensorStatus()
         val start = _settings.value.sensorStartMs
         val cal = calibration()
-        return db.readings(fromMs, toMs)
+        return ClinicalGate.forDosing(db.readings(fromMs, toMs))
             .filter { st == null || SensorLife.readingsAllowed(st) || it.timeMs < start }
             .map { it.copy(mgdl = cal.apply(it.mgdl)) }
+    }
+
+    /** Eligibility gate used by every dose entry point; never falls back to meal-only advice. */
+    fun dosingReadings(now: Long = System.currentTimeMillis()): List<GlucoseReading> {
+        val phase = sensorStatus(now)?.phase
+        if (phase != null && phase != SensorPhase.ACTIVE) return emptyList()
+        val recent = ClinicalGate.forDosing(readings(now - HOUR_MS, now))
+        if (BleReadingValidator.isStale(recent.lastOrNull(), now)) return emptyList()
+        return recent
     }
 
     fun latest(now: Long = System.currentTimeMillis()): GlucoseReading? = readings(now - 3 * HOUR_MS).lastOrNull()

@@ -2,6 +2,7 @@ package com.mm.smartcgm.engine
 
 import android.content.Context
 import com.mm.smartcgm.cloud.CloudSync
+import com.mm.smartcgm.core.ClinicalGate
 import com.mm.smartcgm.core.AlertEngine
 import com.mm.smartcgm.core.AlertState
 import com.mm.smartcgm.core.AlertStateCodec
@@ -58,9 +59,9 @@ object Pipeline {
     fun evaluate(ctx: Context) {
         val now = System.currentTimeMillis()
         val s = Repo.settings.value
-        val recent = Repo.readings(now - HOUR_MS)
+        val recent = ClinicalGate.forDosing(Repo.readings(now - HOUR_MS, now))
         val forecast = Prediction.forecast(recent, s.alerts.low.thresholdMgdl)
-        val (alerts, next) = AlertEngine.evaluate(recent.lastOrNull(), forecast, Repo.sensorStatus(now),
+        val (alerts, next) = AlertEngine.evaluate(ClinicalGate.forAlarm(recent, now, s.alerts.staleMinutes * 60_000L), forecast, Repo.sensorStatus(now),
             s.alerts.copy(unit = s.unit), alertState, now)
         alertState = next
         alerts.forEach { Alarms.show(ctx, it) }

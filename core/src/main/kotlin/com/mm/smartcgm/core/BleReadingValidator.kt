@@ -28,8 +28,8 @@ object BleReadingValidator {
     ): Result {
         if (mgdl.isNaN() || mgdl.isInfinite()) return Result.Rejected("not-a-number")
         if (mgdl < MIN_MGDL || mgdl > MAX_MGDL) return Result.Rejected("out-of-range:$mgdl")
-        if (timeMs > nowMs + 5 * MINUTE_MS) return Result.Rejected("future-timestamp")
-        if (nowMs - timeMs > 2 * HOUR_MS) return Result.Rejected("too-old-for-live")
+        if (timeMs <= 0 || timeMs > nowMs) return Result.Rejected("future-timestamp")
+        if (nowMs - timeMs > 5 * MINUTE_MS) return Result.Rejected("too-old-for-live")
         if (lastAcceptedMs != null && timeMs <= lastAcceptedMs) return Result.Rejected("duplicate-or-out-of-order")
         return Result.Ok(GlucoseReading(timeMs, mgdl, source, sensorId, ReadingTrust.EXPERIMENTAL))
     }

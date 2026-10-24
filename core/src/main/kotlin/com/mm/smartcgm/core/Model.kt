@@ -14,7 +14,7 @@ enum class ReadingTrust {
         /** Single source of truth: the direct-BLE LinX source is experimental; everything else is trusted.
          *  Deriving trust from the source string makes it survive storage/reload with no extra DB column. */
         fun of(source: String): ReadingTrust =
-            if (source == "linx-ble" || source.startsWith("linx-ble:")) EXPERIMENTAL else TRUSTED
+            if (source.lowercase().replace('_', '-').let { it == "linx-ble" || it.startsWith("linx-ble:") }) EXPERIMENTAL else TRUSTED
     }
 }
 
@@ -27,10 +27,11 @@ data class GlucoseReading(
     /** Sensor serial when the source reports one. */
     val sensorId: String? = null,
     /** Clinical trust level. Defaults to TRUSTED so existing sources are unchanged. */
-    val trust: ReadingTrust = ReadingTrust.TRUSTED,
+    val trust: ReadingTrust = ReadingTrust.of(source),
 ) {
     /** A copy whose trust is re-derived from [source] — used when rebuilding a reading from storage. */
-    fun withDerivedTrust(): GlucoseReading = copy(trust = ReadingTrust.of(source))
+    fun withDerivedTrust(): GlucoseReading = copy(trust =
+        if (trust == ReadingTrust.EXPERIMENTAL) trust else ReadingTrust.of(source))
 }
 
 /** A finger-stick (meter) value used for calibration. */

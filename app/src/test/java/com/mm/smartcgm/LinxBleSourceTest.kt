@@ -30,7 +30,7 @@ class LinxBleSourceTest {
     @Test fun validDecodedFrameIsIngestedAsExperimental() {
         // A fake *test-only* codec stands in for the (still unverified) real one, to prove the pipeline + tagging.
         val fake = object : LinxFrameCodec {
-            override fun decodeReading(frame: ByteArray) = LinxRawReading(mgdl = 120.0, sensorTimeMs = 0)
+            override fun decodeReading(frame: ByteArray) = LinxRawReading(mgdl = 120.0, sensorTimeMs = 0, timeMs = 1_800_000_000_000L)
         }
         val got = mutableListOf<GlucoseReading>()
         val src = LinxBleSource(ctx, { got += it }, fake)
@@ -43,9 +43,27 @@ class LinxBleSourceTest {
         assertEquals(120.0, got[0].mgdl, 0.001)
     }
 
+    @Test fun arrivalTimeCannotMakeAnUnmappedOrReplayedSampleLookLive() {
+        val now = 1_800_000_000_000L
+        val got = mutableListOf<GlucoseReading>()
+        val unmapped = object : LinxFrameCodec {
+            override fun decodeReading(frame: ByteArray) = LinxRawReading(120.0, 0)
+        }
+        assertEquals("sensor-clock-unmapped", LinxBleSource(ctx, { got += it }, unmapped).onFrame(byteArrayOf(0), now, "SN"))
+        val mapped = object : LinxFrameCodec {
+            override fun decodeReading(frame: ByteArray) = LinxRawReading(120.0, 0, timeMs = now)
+        }
+        val src = LinxBleSource(ctx, { got += it }, mapped)
+        assertNull(src.onFrame(byteArrayOf(0), now, "SN"))
+        assertEquals("duplicate-or-out-of-order", src.onFrame(byteArrayOf(0), now + 60_000, "SN"))
+        assertEquals(1, got.size)
+        assertEquals(now, got.single().timeMs)
+        assertEquals("sensor-identity-unavailable", src.onFrame(byteArrayOf(0), now, null))
+    }
+
     @Test fun implausibleDecodedValueIsRejected() {
         val fake = object : LinxFrameCodec {
-            override fun decodeReading(frame: ByteArray) = LinxRawReading(mgdl = 999.0, sensorTimeMs = 0)
+            override fun decodeReading(frame: ByteArray) = LinxRawReading(mgdl = 999.0, sensorTimeMs = 0, timeMs = System.currentTimeMillis())
         }
         val got = mutableListOf<GlucoseReading>()
         val src = LinxBleSource(ctx, { got += it }, fake)

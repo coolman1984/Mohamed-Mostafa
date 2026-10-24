@@ -37,10 +37,8 @@ import com.mm.smartcgm.ai.MealEstimate
 import com.mm.smartcgm.ai.MedicationScan
 import com.mm.smartcgm.ai.VisionAi
 import com.mm.smartcgm.core.GlucoseEffect
-import com.mm.smartcgm.core.HOUR_MS
 import com.mm.smartcgm.core.MedicationEffects
 import com.mm.smartcgm.core.MedicationEntry
-import com.mm.smartcgm.core.Prediction
 import com.mm.smartcgm.data.Repo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -143,9 +141,6 @@ fun ScannerScreen() {
     }
 
     if (showBolus) {
-        val now = System.currentTimeMillis()
-        val recent = Repo.readings(now - HOUR_MS)
-        val predicted = Prediction.forecast(recent, Repo.settings.value.alerts.low.thresholdMgdl)?.minutesToLow != null
-        BolusDialog(recent.lastOrNull()?.mgdl, Repo.iob(now), predicted, meal?.carbsGrams ?: 0.0) { showBolus = false }
+        BolusDialog(initialCarbs = meal?.carbsGrams ?: 0.0) { showBolus = false }
     }
 }

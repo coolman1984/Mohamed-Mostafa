@@ -25,6 +25,8 @@ data class LinxRawReading(
     val sensorTimeMs: Long,
     /** Raw trend/rate code if the frame carries one; null when absent. */
     val trendCode: Int? = null,
+    /** Absolute sample time, only after evidence-backed clock mapping. Null refuses ingestion. */
+    val timeMs: Long? = null,
 )
 
 /** Decodes raw BLE frames into readings. Implementation gated on captured, authorized evidence. */

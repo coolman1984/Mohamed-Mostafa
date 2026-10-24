@@ -22,11 +22,10 @@ class LinxGateTest {
         assertEquals(ReadingTrust.TRUSTED, ClinicalGate.forAlarm(list, now)!!.trust)
     }
 
-    @Test fun alarmUsesExperimentalOnlyWhenNoFreshTrusted() {
+    @Test fun experimentalCannotBeTheOnlyAlarmSource() {
         // trusted reading is stale (10 min old), experimental is fresh
         val list = listOf(trusted(now - 10 * MINUTE_MS, 90.0), exp(now, 55.0))
-        val r = ClinicalGate.forAlarm(list, now)!!
-        assertEquals(ReadingTrust.EXPERIMENTAL, r.trust)
+        assertNull(ClinicalGate.forAlarm(list, now))
     }
 
     @Test fun alarmReturnsNullWhenAllStale() {
@@ -34,7 +33,7 @@ class LinxGateTest {
     }
 
     @Test fun experimentalMayRaiseLowOnlyProtectivelyAndAlone() {
-        assertTrue(ClinicalGate.experimentalMayRaiseLow(exp(now, 60.0), 70.0, hasFreshTrusted = false))
+        assertFalse(ClinicalGate.experimentalMayRaiseLow(exp(now, 60.0), 70.0, hasFreshTrusted = false))
         // not when a trusted source is present
         assertFalse(ClinicalGate.experimentalMayRaiseLow(exp(now, 60.0), 70.0, hasFreshTrusted = true))
         // not when the value is in range (would not be protective)
@@ -45,6 +44,21 @@ class LinxGateTest {
 
     @Test fun experimentalNeverSuppresses() {
         assertFalse(ClinicalGate.experimentalMaySuppress())
+    }
+
+    @Test fun aliasesAndExplicitExperimentalTrustCannotBeUpgraded() {
+        for (source in listOf("linx-ble", "linx_ble", "LINX_BLE:legacy")) {
+            assertTrue(ClinicalGate.forDosing(listOf(GlucoseReading(now, 250.0, source))).isEmpty())
+            assertNull(ClinicalGate.forAlarm(listOf(GlucoseReading(now, 50.0, source)), now))
+        }
+        val r = GlucoseReading(now, 120.0, "custom-source", trust = ReadingTrust.EXPERIMENTAL)
+        assertEquals(ReadingTrust.EXPERIMENTAL, r.withDerivedTrust().trust)
+        assertTrue(ClinicalGate.forDosing(listOf(r)).isEmpty())
+    }
+
+    @Test fun alarmRejectsFutureAndNonFiniteSamples() {
+        assertNull(ClinicalGate.forAlarm(listOf(trusted(now + MINUTE_MS, 50.0)), now))
+        assertNull(ClinicalGate.forAlarm(listOf(trusted(now, Double.NaN)), now))
     }
 
     @Test fun validatorAcceptsPlausibleAndTagsExperimental() {
