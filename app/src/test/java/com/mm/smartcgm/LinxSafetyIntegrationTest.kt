@@ -40,6 +40,7 @@ class LinxSafetyIntegrationTest {
 
     @Test fun trustedAndExperimentalReadingsCannotDeduplicateEachOtherInEitherOrder() {
         val t = now - 60_000
+        Repo.updateSettings { it.copy(sensorStartMs = t - 2 * DAY_MS) }
         Repo.ingest(GlucoseReading(t, 300.0, "linx-ble"))
         Repo.ingest(GlucoseReading(t, 50.0, "juggluco"))
         Repo.ingest(GlucoseReading(t + 60_000, 51.0, "juggluco"))
@@ -61,6 +62,7 @@ class LinxSafetyIntegrationTest {
 
     @Test fun freshnessAndOfficialLifeGateEveryDoseEntryPoint() {
         val t = now
+        Repo.updateSettings { it.copy(sensorStartMs = t - 2 * DAY_MS) }
         Repo.ingest(GlucoseReading(t - 6 * MINUTE_MS, 250.0, "juggluco"))
         assertTrue(Repo.dosingReadings(t).isEmpty())
         Repo.ingest(GlucoseReading(t, 240.0, "juggluco"))
@@ -96,7 +98,8 @@ class LinxSafetyIntegrationTest {
         val bodies = mutableListOf<String>()
         try {
             CloudSync.transport = { _, _, _, body -> body?.let { bodies += it }; 200 to "{}" }
-            CloudSync.pushLatest(Repo.settings.value.copy(backendUrl = "https://example.invalid"))
+            Repo.updateSettings { it.copy(backendUrl = "https://example.invalid") }
+            CloudSync.pushLatest(Repo.settings.value)
         } finally { CloudSync.transport = real }
         assertTrue(bodies.any { it.contains("120") })
         assertFalse(bodies.any { it.contains("555") })

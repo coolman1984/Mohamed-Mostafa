@@ -15,8 +15,7 @@ import java.util.concurrent.TimeUnit
  */
 class WatchdogWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
-        runCatching { MonitorService.start(applicationContext) }
-        return Result.success()
+        return runCatching { MonitorService.start(applicationContext); Result.success() }.getOrElse { Result.retry() }
     }
 }
 

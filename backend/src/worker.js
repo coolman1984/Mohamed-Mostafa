@@ -24,7 +24,7 @@ export function normalizeReading(r, now) {
   else if (r && typeof r === 'object') o = r;
   else return null;
   const { t, mgdl } = o;
-  if (!Number.isInteger(t) || t <= 1e12 || t >= now + 3600_000) return null;
+  if (!Number.isInteger(t) || t <= 1e12 || t > now + 5 * 60_000) return null;
   if (typeof mgdl !== 'number' || !(mgdl >= LIMITS.MIN_MGDL && mgdl <= LIMITS.MAX_MGDL)) return null;
   if (o.source != null && !SOURCES.includes(o.source)) return null;
   if (o.serial != null && !(typeof o.serial === 'string' && SERIAL_RE.test(o.serial))) return null;
@@ -77,9 +77,30 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 const err = (status, message) => json({ error: message }, status);
 
 async function body(req, max = LIMITS.MAX_BODY) {
-  const text = await req.text();
-  if (text.length > max) throw new HttpError(413, 'too large');
-  try { return text ? JSON.parse(text) : {}; } catch { throw new HttpError(400, 'bad json'); }
+  const declared = Number(req.headers.get('content-length'));
+  if (declared > max) throw new HttpError(413, 'too large');
+  const reader = req.body?.getReader();
+  const chunks = [];
+  let length = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > max) { await reader.cancel(); throw new HttpError(413, 'too large'); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let parsed;
+  try { parsed = length ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) : {}; }
+  catch { throw new HttpError(400, 'bad json'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'object required');
+  return parsed;
 }
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 
@@ -106,17 +127,22 @@ export async function handle(req, env, now = Date.now()) {
     if (m === 'POST' && parts[1] === 'invites' && parts[2] === 'redeem' && parts.length === 3) {
       const b = await body(req);
       const code = String(b.code || '').trim().toUpperCase().replace(/^SMARTCGM:/, '');
+      if (!/^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{10}$/.test(code)) return err(400, 'bad invite');
       const inv = await db.prepare('SELECT patient, role, expires FROM invites WHERE code = ?').bind(code).first();
-      if (!inv || inv.expires < now) return err(404, 'invite not found or expired');
-      const n = await db.prepare("SELECT COUNT(*) AS n FROM tokens WHERE patient = ? AND role != 'OWNER'").bind(inv.patient).first();
-      if (n.n >= LIMITS.MAX_FOLLOWERS) return err(409, 'too many followers');
+      if (!inv || inv.expires <= now) return err(404, 'invite not found or expired');
       const token = randomToken();
+      const tokenHash = await sha256(token);
       const name = String(b.name || '').slice(0, 40);
-      await db.batch([
-        db.prepare('DELETE FROM invites WHERE code = ?').bind(code),
-        db.prepare('INSERT INTO tokens (hash, patient, role, name, created) VALUES (?,?,?,?,?)')
-          .bind(await sha256(token), inv.patient, inv.role, name, now),
+      // Both the existence/expiry check and follower limit are evaluated INSIDE the atomic write.
+      const results = await db.batch([
+        db.prepare(`INSERT INTO tokens (hash, patient, role, name, created)
+          SELECT ?1, patient, role, ?2, ?3 FROM invites WHERE code = ?4 AND expires > ?3
+          AND (SELECT COUNT(*) FROM tokens WHERE patient = invites.patient AND role != 'OWNER') < ?5`)
+          .bind(tokenHash, name, now, code, LIMITS.MAX_FOLLOWERS),
+        db.prepare('DELETE FROM invites WHERE code = ? AND EXISTS (SELECT 1 FROM tokens WHERE hash = ?)')
+          .bind(code, tokenHash),
       ]);
+      if (changes(results[0]) !== 1) return err(409, 'invite consumed or follower limit reached');
       return json({ patient: inv.patient, role: inv.role, token });
     }
 
@@ -135,12 +161,16 @@ export async function handle(req, env, now = Date.now()) {
       if (owner) return owner.hash === h ? json({ ok: true }) : err(409, 'id already registered');
       await db.batch([
         db.prepare('INSERT OR IGNORE INTO patients (id, created) VALUES (?,?)').bind(pid, now),
-        db.prepare("INSERT INTO tokens (hash, patient, role, created) VALUES (?,?, 'OWNER', ?)").bind(h, pid, now),
+        db.prepare(`INSERT OR IGNORE INTO tokens (hash, patient, role, created)
+          SELECT ?1, ?2, 'OWNER', ?3 WHERE NOT EXISTS
+          (SELECT 1 FROM tokens WHERE patient = ?2 AND role = 'OWNER')`).bind(h, pid, now),
       ]);
+      const claimed = await db.prepare("SELECT hash FROM tokens WHERE patient = ? AND role = 'OWNER'").bind(pid).first();
+      if (claimed?.hash !== h) return err(409, 'id already registered or token in use');
       return json({ ok: true }, 201);
     }
 
-    if (res === 'invites' && m === 'POST') {
+    if (res === 'invites' && m === 'POST' && parts.length === 4) {
       await auth(req, db, pid, ['OWNER']);
       const b = await body(req);
       const role = b.role === 'ADMIN' ? 'ADMIN' : b.role === 'VIEWER' ? 'VIEWER' : null;
@@ -153,9 +183,9 @@ export async function handle(req, env, now = Date.now()) {
       return json({ code, role, expires: now + LIMITS.INVITE_TTL_MS }, 201);
     }
 
-    if (res === 'followers') {
+    if (res === 'followers' && (parts.length === 4 || (m === 'DELETE' && parts.length === 5))) {
       await auth(req, db, pid, ['OWNER']);
-      if (m === 'GET') {
+      if (m === 'GET' && parts.length === 4) {
         const r = await db.prepare("SELECT substr(hash,1,12) AS id, role, name, created FROM tokens WHERE patient = ? AND role != 'OWNER' ORDER BY created").bind(pid).all();
         return json({ followers: r.results });
       }
@@ -196,7 +226,9 @@ export async function handle(req, env, now = Date.now()) {
         const full = url.searchParams.get('format') === 'full';
         const days = full ? Math.min(Math.max(Number(url.searchParams.get('days')) || 1, 1), LIMITS.KEEP_DAYS) : 1;
         const since = Math.max(Number.isFinite(after) ? after : 0, now - days * 86400_000);
-        const r = await db.prepare('SELECT t, mgdl, source, serial, age_days, trend FROM readings WHERE patient = ? AND t > ? ORDER BY t LIMIT ?').bind(pid, since, LIMITS.MAX_PULL).all();
+        // Legacy tuples cannot carry experimental trust or sensor age: never strip those protections.
+        const trustedOnly = full ? '' : " AND (source IS NULL OR source != 'linx_ble') AND (age_days IS NULL OR age_days < 15)";
+        const r = await db.prepare(`SELECT t, mgdl, source, serial, age_days, trend FROM readings WHERE patient = ? AND t > ?${trustedOnly} ORDER BY t LIMIT ?`).bind(pid, since, LIMITS.MAX_PULL).all();
         if (!full) return json({ readings: r.results.map((x) => [x.t, x.mgdl]) });
         return json({ readings: r.results.map((x) => {
           const o = { t: x.t, mgdl: x.mgdl };
@@ -209,7 +241,7 @@ export async function handle(req, env, now = Date.now()) {
       }
     }
 
-    if (res === 'status') {
+    if (res === 'status' && parts.length === 4) {
       if (m === 'PUT') {
         await auth(req, db, pid, ['OWNER']);
         const b = await body(req);
@@ -230,7 +262,7 @@ export async function handle(req, env, now = Date.now()) {
       }
     }
 
-    if (res === 'events') {
+    if (res === 'events' && (parts.length === 4 || (m === 'DELETE' && parts.length === 5))) {
       if (m === 'POST') {
         await auth(req, db, pid, ['ADMIN']);
         const b = await body(req);
@@ -239,7 +271,10 @@ export async function handle(req, env, now = Date.now()) {
         const n = await db.prepare('SELECT COUNT(*) AS n FROM events WHERE patient = ?').bind(pid).first();
         if (n.n >= LIMITS.MAX_EVENTS) return err(429, 'too many pending events');
         const t = Number.isInteger(b.time) && Math.abs(b.time - now) < 86400_000 ? b.time : now;
-        await db.prepare('INSERT INTO events (patient, type, value, t) VALUES (?,?,?,?)').bind(pid, b.type, b.value, t).run();
+        const inserted = await db.prepare(`INSERT INTO events (patient, type, value, t)
+          SELECT ?1, ?2, ?3, ?4 WHERE (SELECT COUNT(*) FROM events WHERE patient = ?1) < ?5`)
+          .bind(pid, b.type, b.value, t, LIMITS.MAX_EVENTS).run();
+        if (changes(inserted) !== 1) return err(429, 'too many pending events');
         return json({ ok: true }, 201);
       }
       if (m === 'GET') {
@@ -254,7 +289,7 @@ export async function handle(req, env, now = Date.now()) {
       }
     }
 
-    if (res === 'proposal') {
+    if (res === 'proposal' && parts.length === 4) {
       if (m === 'PUT') {
         await auth(req, db, pid, ['ADMIN']);
         const b = await body(req);

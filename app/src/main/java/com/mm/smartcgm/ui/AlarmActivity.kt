@@ -51,6 +51,16 @@ class AlarmActivity : ComponentActivity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) { override fun handleOnBackPressed() = Unit })
+        renderAlarm()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        renderAlarm()
+    }
+
+    private fun renderAlarm() {
         val title = intent.getStringExtra(EXTRA_TITLE) ?: "🚨 هبوط خطير"
         val body = intent.getStringExtra(EXTRA_BODY) ?: ""
         setContent {
@@ -62,7 +72,7 @@ class AlarmActivity : ComponentActivity() {
 
     /** Silences the sound and clears the notification; the alert schedule itself is untouched. */
     fun acknowledge() {
-        Alarms.stopSound()
+        Alarms.acknowledge(AlertType.URGENT_LOW)
         getSystemService(NotificationManager::class.java)?.cancel(1000 + AlertType.URGENT_LOW.ordinal)
         acknowledged = true
         finish()

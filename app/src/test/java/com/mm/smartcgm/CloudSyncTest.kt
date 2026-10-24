@@ -57,14 +57,14 @@ class CloudSyncTest {
             it.second == s.ownerToken && it.third!!.contains("[${now - 60_000},101]") })
     }
 
-    @Test fun followerEventIsImportedOnlyAfterTheServerDeletedIt() {
+    @Test fun followerEventIsDurableBeforeAckAndNeverDuplicated() {
         val now = System.currentTimeMillis()
         val events = """{"events":[{"id":1,"type":"dose","value":4,"time":${now - 60_000}},""" +
             """{"id":2,"type":"dose","value":-4,"time":$now},{"id":3,"type":"carbs","value":900,"time":$now}]}"""
         // 1st minute: the DELETE fails (offline/500) → nothing may be imported, or it would be imported again next minute.
         CloudSync.transport = { m, u, _, _ -> if (m == "GET" && u.endsWith("/events")) 200 to events else if (m == "DELETE") 500 to "" else 200 to "{}" }
         CloudSync.pullAdminEvents(Repo.settings.value)
-        assertEquals(0, Repo.db.doses(0).size)
+        assertEquals(listOf(4.0), Repo.db.doses(0).map { it.units })
         // 2nd minute: delete works → the valid 4 u dose is imported once; -4 u and 900 g are rejected.
         CloudSync.transport = { m, u, _, _ -> if (m == "GET" && u.endsWith("/events")) 200 to events else 200 to "{}" }
         CloudSync.pullAdminEvents(Repo.settings.value)

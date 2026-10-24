@@ -90,7 +90,7 @@ private fun AppRoot() {
         }
     }) { pad ->
         Box(Modifier.padding(pad)) {
-            when (tab) {
+            when (if (follower && tab == 1) 0 else tab) {
                 0 -> HomeScreen()
                 1 -> ScannerScreen()
                 2 -> LogbookScreen()

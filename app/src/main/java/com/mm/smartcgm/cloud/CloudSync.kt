@@ -6,6 +6,8 @@ import com.mm.smartcgm.core.GlucoseReading
 import com.mm.smartcgm.core.InsulinDose
 import com.mm.smartcgm.core.InsulinKind
 import com.mm.smartcgm.core.SafeLimits
+import com.mm.smartcgm.core.ReadingTrust
+import com.mm.smartcgm.data.AppMode
 import com.mm.smartcgm.data.AppSettings
 import com.mm.smartcgm.data.Repo
 import org.json.JSONArray
@@ -24,6 +26,12 @@ import java.net.URL
  */
 object CloudSync {
 
+    private fun key(s: AppSettings, purpose: String, credentials: Boolean = true): String = purpose + ":" +
+        java.security.MessageDigest.getInstance("SHA-256").digest(
+            ("${s.backendUrl.trimEnd('/')}|${s.activeAccountCode}" + if (credentials) "|${s.activeToken}" else "").toByteArray())
+            .joinToString("") { "%02x".format(it) }
+    private fun current(s: AppSettings) = Repo.isCurrent(s)
+
     private fun base(s: AppSettings) = "${s.backendUrl.trimEnd('/')}/v1/p/${s.activeAccountCode}"
 
     private const val PUSH_CURSOR = "cloudLastPushedMs"
@@ -39,6 +47,8 @@ object CloudSync {
 
     private fun http(method: String, url: String, token: String?, body: String?): Pair<Int, String>? = try {
         val c = URL(url).openConnection() as HttpURLConnection
+        require(URL(url).protocol == "https") { "HTTPS required" }
+        c.instanceFollowRedirects = false
         c.requestMethod = method
         c.connectTimeout = 8000
         c.readTimeout = 8000
@@ -50,24 +60,45 @@ object CloudSync {
                 c.outputStream.use { it.write(body.toByteArray()) }
             }
             val code = c.responseCode
-            code to ((if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: "")
+            code to ((if (code in 200..299) c.inputStream else c.errorStream)?.use { stream ->
+                val bytes = boundedRead(stream)
+                require(bytes.size <= 1_000_000) { "Response too large" }
+                bytes.toString(Charsets.UTF_8)
+            } ?: "")
         } finally { c.disconnect() }
     } catch (e: java.io.IOException) { null }
 
-    private fun call(method: String, url: String, token: String?, body: JSONObject? = null): JSONObject? {
-        val r = transport(method, url, token, body?.toString()) ?: return null
-        return if (r.first in 200..299) runCatching { JSONObject(r.second) }.getOrNull() ?: JSONObject() else null
+    private fun boundedRead(stream: java.io.InputStream): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val n = stream.read(buffer)
+            if (n < 0) break
+            require(out.size() + n <= 1_000_000) { "Response too large" }
+            out.write(buffer, 0, n)
+        }
+        return out.toByteArray()
     }
 
-    fun enabled(s: AppSettings) = s.backendUrl.isNotBlank() && s.activeToken.isNotBlank() && s.activeAccountCode.isNotBlank()
+    private fun call(method: String, url: String, token: String?, body: JSONObject? = null): JSONObject? {
+        val r = runCatching { transport(method, url, token, body?.toString()) }.getOrNull() ?: return null
+        return if (r.first in 200..299) runCatching { if (r.second.isBlank()) JSONObject() else JSONObject(r.second) }.getOrNull() else null
+    }
+
+    fun enabled(s: AppSettings) = runCatching {
+        val u = java.net.URI(s.backendUrl)
+        u.scheme == "https" && !u.host.isNullOrBlank() && u.rawUserInfo == null && u.rawQuery == null && u.rawFragment == null &&
+            s.activeToken.length in 32..128 && s.activeAccountCode.matches(Regex("[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12,32}"))
+    }.getOrDefault(false)
 
     /** Patient phone: claim the account code with this phone's token (idempotent). */
     fun ensureRegistered(s: AppSettings): Boolean {
-        val key = "${s.backendUrl}|${s.accountCode}"
-        if (Repo.store.getString(REGISTERED) == key) return true
+        if (!enabled(s) || s.mode != AppMode.PATIENT || !current(s)) return false
+        val key = key(s, REGISTERED)
+        if (Repo.store.getString(key) == "registered") return true
         val ok = call("POST", "${s.backendUrl.trimEnd('/')}/v1/p/${s.accountCode}/register", null,
             JSONObject().put("token", s.ownerToken)) != null
-        if (ok) Repo.store.putString(REGISTERED, key)
+        if (ok) Repo.withProfile(s) { Repo.store.putString(key, "registered") }
         return ok
     }
 
@@ -80,14 +111,17 @@ object CloudSync {
 
     /** Follower phone: redeem a code. On success the phone switches to follower mode with its own token. */
     fun redeemInvite(s: AppSettings, code: String): Boolean {
-        val r = call("POST", "${s.backendUrl.trimEnd('/')}/v1/invites/redeem", null, JSONObject().put("code", code)) ?: return false
+        if (!current(s) || s.backendUrl.isBlank()) return false
+        val parsed = com.mm.smartcgm.core.Pairing.parseInvite(code) ?: return false
+        val r = call("POST", "${s.backendUrl.trimEnd('/')}/v1/invites/redeem", null, JSONObject().put("code", parsed)) ?: return false
         val patient = r.optString("patient")
         val token = r.optString("token")
         val role = runCatching { FollowerRole.valueOf(r.optString("role")) }.getOrNull() ?: return false
-        if (patient.isBlank() || token.isBlank() || patient == s.accountCode) return false
-        Repo.updateSettings { it.copy(mode = com.mm.smartcgm.data.AppMode.FOLLOWER, followAccountCode = patient,
-            followToken = token, followRole = role) }
-        return true
+        if (!patient.matches(Regex("[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{12,32}")) || token.length !in 32..128 || patient == s.accountCode) return false
+        return Repo.withProfile(s) {
+            Repo.updateSettings { it.copy(mode = AppMode.FOLLOWER, followAccountCode = patient, followToken = token, followRole = role) }
+            true
+        } ?: false
     }
 
     /**
@@ -96,88 +130,109 @@ object CloudSync {
      */
     @Synchronized
     fun pushLatest(s: AppSettings) {
-        if (!enabled(s) || !ensureRegistered(s)) return
+        if (s.mode != AppMode.PATIENT || !current(s) || !enabled(s) || !ensureRegistered(s)) return
         val now = System.currentTimeMillis()
-        val since = maxOf(Repo.store.getLong(PUSH_CURSOR, 0) + 1, now - MAX_BACKFILL_MS)
-        val pending = Repo.readings(since)
-        if (pending.isEmpty()) return
+        val cursorKey = key(s, PUSH_CURSOR)
+        val pending = Repo.withProfile(s) {
+            val since = maxOf(Repo.store.getLong(cursorKey) + 1, now - MAX_BACKFILL_MS)
+            Repo.readings(since, now)
+        } ?: return
         for (chunk in pending.chunked(BATCH)) {
+            if (!current(s)) return
             val arr = JSONArray()
             chunk.forEach { arr.put(JSONArray().put(it.timeMs).put(Math.round(it.mgdl))) }
-            call("POST", "${base(s)}/readings", s.ownerToken, JSONObject().put("readings", arr)) ?: return
-            Repo.store.putLong(PUSH_CURSOR, chunk.last().timeMs)
+            val ack = call("POST", "${base(s)}/readings", s.ownerToken, JSONObject().put("readings", arr)) ?: return
+            if (ack.optInt("rejected", -1) != 0 || ack.optInt("stored", -1) != chunk.size) return
+            Repo.withProfile(s) { Repo.store.putLong(cursorKey, chunk.last().timeMs) } ?: return
         }
-        val last = pending.last()
-        call("PUT", "${base(s)}/status", s.ownerToken, JSONObject()
-            .put("time", last.timeMs).put("mgdl", Math.round(last.mgdl))
-            .put("iob", Repo.iob(now)).put("cob", Repo.cob(now)).put("sensorStart", s.sensorStartMs))
+        // Retry status even with no new samples, e.g. the previous upload succeeded but status failed.
+        val status = Repo.withProfile(s) {
+            val last = Repo.latest(now) ?: return@withProfile null
+            JSONObject().put("time", last.timeMs).put("mgdl", Math.round(last.mgdl))
+                .put("iob", Repo.iob(now)).put("cob", Repo.cob(now)).put("sensorStart", Repo.settings.value.sensorStartMs)
+        } ?: return
+        if (current(s)) call("PUT", "${base(s)}/status", s.ownerToken, status)
     }
 
-    /** Follower phone: copy the patient's last 24 h into the local DB (incremental after the first pull). */
+    /** Every response is applied only to the profile that issued it. Metadata cannot be laundered into cloud trust. */
+    @Synchronized
     fun pullAsFollower(s: AppSettings) {
-        if (!enabled(s)) return
-        if (Repo.store.getString(PULL_ACCOUNT) != s.activeAccountCode) {
-            Repo.store.putString(PULL_ACCOUNT, s.activeAccountCode)
-            Repo.store.putString(PULL_CURSOR, "")
-        }
-        val cursor = Repo.store.getString(PULL_CURSOR)?.toLongOrNull() ?: 0L
-        val r = call("GET", "${base(s)}/readings?after=$cursor", s.followToken) ?: return
-        val arr = r.optJSONArray("readings") ?: JSONArray()
-        var added = false
-        var maxKey = cursor
-        for (i in 0 until arr.length()) {
-            val p = arr.getJSONArray(i)
-            val t = p.getLong(0)
-            if (Repo.db.insertReading(GlucoseReading(t, p.getDouble(1), "cloud"))) added = true
-            if (t > maxKey) maxKey = t
-        }
-        if (maxKey > cursor) Repo.store.putString(PULL_CURSOR, maxKey.toString())
-        call("GET", "${base(s)}/status", s.followToken)?.optJSONObject("status")?.let { st ->
+        if (s.mode != AppMode.FOLLOWER || !enabled(s) || !current(s)) return
+        val cursorKey = key(s, PULL_CURSOR)
+        val cursor = Repo.withProfile(s) { Repo.store.getLong(cursorKey) } ?: return
+        val r = call("GET", "${base(s)}/readings?format=full&after=$cursor", s.followToken) ?: return
+        val arr = r.optJSONArray("readings") ?: return
+        val now = System.currentTimeMillis()
+        Repo.withProfile(s) {
+            var maxKey = cursor
+            var added = false
+            for (i in 0 until arr.length()) {
+                val item = arr.opt(i)
+                val time = when (item) { is JSONArray -> item.optLong(0); is JSONObject -> item.optLong("t"); else -> 0 }
+                val value = when (item) { is JSONArray -> item.optDouble(1, Double.NaN); is JSONObject -> item.optDouble("mgdl", Double.NaN); else -> Double.NaN }
+                if (time <= 0 || time > now || now - time > 30L * com.mm.smartcgm.core.DAY_MS || !value.isFinite() || value !in 20.0..600.0) continue
+                val experimental = item is JSONObject && (item.optString("source") == "linx_ble" || item.optDouble("ageDays", 0.0) >= 15)
+                val trust = if (experimental) ReadingTrust.EXPERIMENTAL else ReadingTrust.TRUSTED
+                if (Repo.db.insertReading(GlucoseReading(time, value, "cloud", trust = trust))) added = true
+                maxKey = maxOf(maxKey, time)
+            }
+            if (maxKey > cursor) Repo.store.putLong(cursorKey, maxKey)
+            if (added) Repo.touch()
+        } ?: return
+        val st = call("GET", "${base(s)}/status", s.followToken)?.optJSONObject("status") ?: return
+        Repo.withProfile(s) {
             val start = st.optLong("sensorStart", 0)
-            if (start > 0 && start != s.sensorStartMs) Repo.updateSettings { cur -> cur.copy(sensorStartMs = start) }
+            if (start in 1..now && start != Repo.settings.value.sensorStartMs)
+                Repo.updateSettings { it.copy(sensorStartMs = start) }
         }
-        if (added) Repo.touch()
     }
 
     /** Primary follower logs a dose or carbs for the patient. */
-    fun sendEvent(s: AppSettings, type: String, value: Double): Boolean =
-        call("POST", "${base(s)}/events", s.followToken, JSONObject()
+    fun sendEvent(s: AppSettings, type: String, value: Double): Boolean {
+        if (!current(s) || s.mode != AppMode.FOLLOWER || s.followRole != FollowerRole.ADMIN || !enabled(s)) return false
+        if (type == "dose" && !SafeLimits.validDose(value) || type == "carbs" && !SafeLimits.validCarbs(value) || type !in listOf("dose", "carbs")) return false
+        return call("POST", "${base(s)}/events", s.followToken, JSONObject()
             .put("type", type).put("value", value).put("time", System.currentTimeMillis())) != null
+    }
 
     /** P2-6: ADMIN follower proposes alert thresholds; the server range-checks; the patient must approve. */
-    fun proposeThresholds(s: AppSettings, lowMgdl: Double, highMgdl: Double): Boolean =
-        call("PUT", "${base(s)}/proposal", s.followToken, JSONObject().put("low", lowMgdl).put("high", highMgdl)) != null
+    fun proposeThresholds(s: AppSettings, lowMgdl: Double, highMgdl: Double): Boolean {
+        if (!current(s) || !enabled(s) || s.mode != AppMode.FOLLOWER || s.followRole != FollowerRole.ADMIN) return false
+        if (com.mm.smartcgm.core.ThresholdProposal(lowMgdl, highMgdl, System.currentTimeMillis()).problem() != null) return false
+        return call("PUT", "${base(s)}/proposal", s.followToken, JSONObject().put("low", lowMgdl).put("high", highMgdl)) != null
+    }
 
-    /** Patient phone: pick up a pending threshold proposal (validated again locally), then clear it. */
+    /** Patient phone: persist a proposal only in its originating profile, then acknowledge it. */
     fun pullThresholdProposal(s: AppSettings) {
-        if (!enabled(s)) return
+        if (s.mode != AppMode.PATIENT || !enabled(s) || !current(s)) return
         val o = call("GET", "${base(s)}/proposal", s.ownerToken)?.optJSONObject("proposal") ?: return
-        Repo.receiveProposal(com.mm.smartcgm.core.ThresholdProposal(o.optDouble("low", 0.0), o.optDouble("high", 0.0),
-            o.optLong("time", System.currentTimeMillis())))
-        call("DELETE", "${base(s)}/proposal", s.ownerToken)
+        Repo.withProfile(s) {
+            Repo.receiveProposal(com.mm.smartcgm.core.ThresholdProposal(o.optDouble("low", Double.NaN), o.optDouble("high", Double.NaN),
+                o.optLong("time", 0)))
+        } ?: return
+        if (current(s)) call("DELETE", "${base(s)}/proposal", s.ownerToken)
     }
 
     /** Patient phone: import events written by primary followers, then delete them. */
+    @Synchronized
     fun pullAdminEvents(s: AppSettings) {
-        if (!enabled(s)) return
+        if (s.mode != AppMode.PATIENT || !current(s) || !enabled(s)) return
         val arr = call("GET", "${base(s)}/events", s.ownerToken)?.optJSONArray("events") ?: return
-        if (arr.length() == 0) return
         val now = System.currentTimeMillis()
-        var added = false
         for (i in 0 until arr.length()) {
-            val e = arr.getJSONObject(i)
+            val e = arr.optJSONObject(i) ?: continue
             val id = e.optLong("id", -1)
-            if (id < 0) continue
-            // Delete FIRST and import only if the server confirmed it. The old order (import, then delete) re-imported
-            // the same dose every minute whenever the delete failed, which doubled the insulin-on-board.
-            call("DELETE", "${base(s)}/events/$id", s.ownerToken) ?: continue
-            val t = e.optLong("time", now).let { if (it <= 0 || it > now) now else it }
-            val v = e.optDouble("value", 0.0)
-            when (e.optString("type")) {
-                "dose" -> if (SafeLimits.validDose(v)) { Repo.db.addDose(InsulinDose(t, v, InsulinKind.RAPID)); added = true }
-                "carbs" -> if (SafeLimits.validCarbs(v)) { Repo.db.addCarbs(CarbEntry(t, v, "من المتابع")); added = true }
-            }
+            val t = e.optLong("time", 0)
+            if (id < 0 || t <= 0 || t > now || now - t > 24 * 60 * 60_000L) continue
+            val type = e.optString("type")
+            val value = e.optDouble("value", Double.NaN)
+            val stored = Repo.withProfile(s) {
+                val added = Repo.db.importRemoteEvent(key(s, "event:$id", credentials = false), type, value, t)
+                if (added) Repo.touch()
+                true
+            } ?: return
+            // Receipt + dose are durable before ACK. A lost ACK can only retry the receipt, never add another dose.
+            if (stored && current(s)) call("DELETE", "${base(s)}/events/$id", s.ownerToken)
         }
-        if (added) Repo.touch()
     }
 }

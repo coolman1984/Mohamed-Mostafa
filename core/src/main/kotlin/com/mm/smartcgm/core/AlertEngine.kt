@@ -68,14 +68,15 @@ object AlertEngine {
             candidates += Alert(AlertType.SENSOR_REPLACE, false, "🔄 غيّر الحساس", sensor.message) to 24 * 60
         }
 
+        val clockRolledBack = state.lastFired.values.any { it > nowMs }
         val fired = mutableListOf<Alert>()
         val last = state.lastFired.toMutableMap()
         for ((alert, repeat) in candidates) {
             val snooze = state.snoozedUntil[alert.type] ?: 0
             // Urgent low ignores snooze: it's life-threatening.
-            if (alert.type != AlertType.URGENT_LOW && nowMs < snooze) continue
+            if (!clockRolledBack && alert.type != AlertType.URGENT_LOW && nowMs < snooze) continue
             val prev = last[alert.type]
-            if (prev == null || nowMs - prev >= repeat * MINUTE_MS) {
+            if (prev == null || prev > nowMs || nowMs - prev >= repeat * MINUTE_MS) {
                 fired += alert
                 last[alert.type] = nowMs
             }

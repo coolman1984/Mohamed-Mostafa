@@ -32,12 +32,31 @@ object Repo {
     private val _changes = MutableStateFlow(0L)
     val changes: StateFlow<Long> get() = _changes
 
+    val profile: String get() = profileOf(_settings.value)
+    private fun profileOf(s: AppSettings): String = if (s.mode == AppMode.PATIENT) "patient" else
+        "follow-" + digest("${s.backendUrl.trimEnd('/')}|${s.followAccountCode}")
+    private fun digest(s: String) = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    private fun database(s: AppSettings) = Db(app, if (s.mode == AppMode.PATIENT) "smartcgm.db" else "${profileOf(s)}.db",
+        localOnly = s.mode == AppMode.PATIENT)
+
+    fun isCurrent(s: AppSettings): Boolean = _settings.value.let {
+        it.mode == s.mode && it.backendUrl == s.backendUrl && it.activeAccountCode == s.activeAccountCode && it.activeToken == s.activeToken
+    }
+
+    @Synchronized
+    fun <T> withProfile(s: AppSettings, work: () -> T): T? = if (isCurrent(s)) work() else null
+
+    @Synchronized
     fun init(ctx: Context) {
         app = ctx.applicationContext
-        db = Db(app)
         store = SettingsStore(app)
         // Clamp on load too, so a bad value saved by an older version can't reach the math.
         _settings.value = safe(store.load())
+        db = database(_settings.value)
+        sourceSeen.clear()
+        invalidateCalibration()
+        touch()
     }
 
     /** Every settings write goes through the safe limits (typos can't reach dosing or switch off urgent low). */
@@ -46,16 +65,33 @@ object Repo {
 
     @Synchronized
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
-        val s = safe(transform(_settings.value))
+        val old = _settings.value
+        var s = safe(transform(old))
+        if (profileOf(old) != profileOf(s)) {
+            val key = "lifecycle:${profileOf(old)}:"
+            store.putLong(key + "start", old.sensorStartMs)
+            store.putString(key + "sensor", old.sensorId)
+            store.putLong(key + "suspect", old.newSensorSuspectMs)
+            store.putLong(key + "clear", old.clearSuspectMs)
+            val next = "lifecycle:${profileOf(s)}:"
+            s = s.copy(sensorStartMs = store.getLong(next + "start"), sensorId = store.getString(next + "sensor") ?: "",
+                newSensorSuspectMs = store.getLong(next + "suspect"), clearSuspectMs = store.getLong(next + "clear"))
+            db.close()
+            db = database(s)
+            invalidateCalibration()
+            sourceSeen.clear()
+        }
         store.save(s)
         _settings.value = s
         touch()
     }
 
-    fun touch() { _changes.value = System.currentTimeMillis() }
+    @Synchronized
+    fun touch() { _changes.value = _changes.value + 1 }
 
     @Synchronized
     fun ingest(reading: GlucoseReading) {
+        if (_settings.value.mode != AppMode.PATIENT) return
         if (!reading.mgdl.isFinite() || reading.mgdl < 20 || reading.mgdl > 600) return
         if (reading.timeMs <= 0) return
         if (reading.withDerivedTrust().trust == ReadingTrust.EXPERIMENTAL) {
@@ -64,17 +100,25 @@ object Repo {
             if (db.insertReading(reading)) touch()
             return
         }
-        if (reading.timeMs > System.currentTimeMillis() + 5 * 60_000) return
+        if (reading.timeMs > System.currentTimeMillis()) return
         val s = _settings.value
         // A new sensor serial means a new sensor: restart the 15/20-day clock.
         val id = reading.sensorId
+        val retiredKey = "retiredSensors:$profile"
+        val retired = (store.getString(retiredKey) ?: "").split(',').filter { it.isNotBlank() }.toSet()
+        if (!id.isNullOrBlank() && id != s.sensorId && digest(id) in retired) return
         val prev = db.lastReadingTime()
+        if (!db.insertReading(reading)) return
+        invalidateCalibration()
+        // Backfill is historical storage, never evidence of a newly installed sensor.
+        if (prev != null && reading.timeMs <= prev) { touch(); return }
         if (s.mode == com.mm.smartcgm.data.AppMode.PATIENT && s.clearSuspectMs == 0L && SensorLife.suspectedClear(prev,
                 reading.timeMs, s.sensorStartMs, sameSerial = id.isNullOrBlank() || id == s.sensorId)) {
             // Possible Juggluco "Clear" after day 15: keep the OLD start (no fresh 15 days) and warn loudly.
             updateSettings { it.copy(clearSuspectMs = reading.timeMs) }
             if (!id.isNullOrBlank() && id != s.sensorId) updateSettings { it.copy(sensorId = id) }
         } else if (!id.isNullOrBlank() && id != s.sensorId) {
+            if (s.sensorId.isNotBlank()) store.putString(retiredKey, (retired + digest(s.sensorId)).joinToString(","))
             updateSettings { it.copy(sensorId = id, sensorStartMs = reading.timeMs, newSensorSuspectMs = 0) }
         } else if (s.mode == com.mm.smartcgm.data.AppMode.PATIENT &&
             SensorLife.newSensorSuspected(prev, reading.timeMs, s.sensorStartMs)) {
@@ -82,10 +126,8 @@ object Repo {
             updateSettings { it.copy(newSensorSuspectMs = reading.timeMs) }
         }
         sourceSeen[sourceGroup(reading.source)] = System.currentTimeMillis()
-        if (db.insertReading(reading)) {
-            touch()
-            Pipeline.onNewReading(app)
-        }
+        touch()
+        Pipeline.onNewReading(app)
     }
 
     /** Last time (wall clock) each kind of source delivered something; feeds the "data source health" card. */
@@ -103,15 +145,51 @@ object Repo {
     private var calCache: Calibration? = null
     private var calKey: Long = Long.MIN_VALUE
 
-    fun addStick(s: com.mm.smartcgm.core.Fingerstick) {
+    enum class BolusCommit { SAVED, CHANGED, UNAVAILABLE }
+
+    /** One lock covers eligibility, latest IOB/reading, displayed proposal comparison, and the DB transaction. */
+    @Synchronized
+    fun confirmBolus(expected: AppSettings, shown: com.mm.smartcgm.core.BolusSuggestion, carbs: Double,
+                     now: Long = System.currentTimeMillis()): BolusCommit {
+        if (!isCurrent(expected) || (carbs != 0.0 && !SafeLimits.validCarbs(carbs))) return BolusCommit.UNAVAILABLE
+        val recent = dosingReadings(now)
+        if (recent.isEmpty()) return BolusCommit.UNAVAILABLE
+        val latestSettings = _settings.value
+        val next = com.mm.smartcgm.core.BolusAdvisor.suggest(carbs, recent.last().mgdl, iob(now), latestSettings.therapy,
+            com.mm.smartcgm.core.Prediction.forecast(recent, latestSettings.alerts.low.thresholdMgdl)?.minutesToLow != null)
+        if (next.totalUnits != shown.totalUnits || next.blockedForLow != shown.blockedForLow) return BolusCommit.CHANGED
+        db.logBolus(now, carbs, next.totalUnits)
+        touch()
+        return BolusCommit.SAVED
+    }
+
+    @Synchronized
+    fun logDose(expected: AppSettings, dose: com.mm.smartcgm.core.InsulinDose): Boolean =
+        withProfile(expected) {
+            if (expected.mode != AppMode.PATIENT || !SafeLimits.validDose(dose.units)) return@withProfile false
+            db.addDose(dose); touch(); true
+        } ?: false
+
+    @Synchronized
+    fun logCarbs(expected: AppSettings, carbs: com.mm.smartcgm.core.CarbEntry): Boolean =
+        withProfile(expected) {
+            if (expected.mode != AppMode.PATIENT || !SafeLimits.validCarbs(carbs.grams)) return@withProfile false
+            db.addCarbs(carbs); touch(); true
+        } ?: false
+
+    @Synchronized
+    fun addStick(s: com.mm.smartcgm.core.Fingerstick, expected: AppSettings = _settings.value) {
+        if (!isCurrent(expected) || expected.mode != AppMode.PATIENT || !s.mgdl.isFinite() || s.mgdl !in 20.0..600.0) return
         db.addStick(s)
         invalidateCalibration()
         touch()
     }
 
+    @Synchronized
     fun deleteStick(timeMs: Long) { db.deleteStick(timeMs); invalidateCalibration(); touch() }
 
     /** "Undo calibration": forget the finger-sticks of the 7-day calibration window. */
+    @Synchronized
     fun undoCalibration(now: Long = System.currentTimeMillis()) {
         db.deleteSticksSince(now - 7 * DAY_MS); invalidateCalibration(); touch()
     }
@@ -125,7 +203,7 @@ object Repo {
     }
 
     // ---- P2-6: threshold proposals from an ADMIN follower, waiting for the patient's approval ----
-    private const val PROPOSAL_KEY = "pendingThresholdProposal"
+    private val PROPOSAL_KEY: String get() = "pendingThresholdProposal:$profile"
 
     fun pendingProposal(): com.mm.smartcgm.core.ThresholdProposal? =
         store.getString(PROPOSAL_KEY)?.split(',')?.takeIf { it.size == 3 }?.let {
@@ -134,7 +212,10 @@ object Repo {
 
     /** Stores a proposal only if it passes the safety limits; returns false otherwise. */
     fun receiveProposal(p: com.mm.smartcgm.core.ThresholdProposal): Boolean {
-        if (p.problem(_settings.value.alerts.urgentLowMgdl) != null) return false
+        if (_settings.value.mode != AppMode.PATIENT || p.problem(_settings.value.alerts.urgentLowMgdl) != null) return false
+        val seenKey = "proposalSeen:$profile"
+        if (p.timeMs <= store.getLong(seenKey)) return false
+        store.putLong(seenKey, p.timeMs)
         store.putString(PROPOSAL_KEY, "${p.lowMgdl},${p.highMgdl},${p.timeMs}"); touch(); return true
     }
 
@@ -149,6 +230,7 @@ object Repo {
     }
 
     /** P2-2: doses, carbs and meds as logbook events. */
+    @Synchronized
     fun logEvents(fromMs: Long): List<com.mm.smartcgm.core.LogEvent> =
         com.mm.smartcgm.core.Logbook.events(db.doses(fromMs), db.carbs(fromMs), db.meds(fromMs))
 
@@ -156,6 +238,7 @@ object Repo {
 
     /** Cached: the fit only changes when a finger-stick is added, or every 10 minutes as the 7-day window slides. */
     fun calibration(now: Long = System.currentTimeMillis()): Calibration = synchronized(this) {
+        if (_settings.value.mode == AppMode.FOLLOWER) return Calibration.IDENTITY
         val key = now / (10 * 60_000L)
         calCache?.takeIf { calKey == key }?.let { return it }
         val sticks = db.sticks(now - 7 * DAY_MS)
@@ -169,6 +252,7 @@ object Repo {
         _settings.value.sensorStartMs.takeIf { it > 0 }?.let { SensorLife.status(it, now) }
 
     /** Calibrated readings, hidden entirely once the sensor passed its hard limit. */
+    @Synchronized
     fun readings(fromMs: Long, toMs: Long = Long.MAX_VALUE): List<GlucoseReading> {
         val st = sensorStatus()
         val start = _settings.value.sensorStartMs
@@ -178,8 +262,20 @@ object Repo {
             .map { it.copy(mgdl = cal.apply(it.mgdl)) }
     }
 
+    /** Known expired/restarted sensor values are not a clinical alarm input. Existing urgent sound is never auto-cleared. */
+    @Synchronized
+    fun alarmReadings(now: Long = System.currentTimeMillis()): List<GlucoseReading> {
+        val current = _settings.value
+        val phase = sensorStatus(now)?.phase
+        if (current.clearSuspectMs > 0 || phase == SensorPhase.EXTENDED || phase == SensorPhase.EXPIRED) return emptyList()
+        return ClinicalGate.forDosing(readings(now - HOUR_MS, now))
+    }
+
     /** Eligibility gate used by every dose entry point; never falls back to meal-only advice. */
+    @Synchronized
     fun dosingReadings(now: Long = System.currentTimeMillis()): List<GlucoseReading> {
+        val settings = _settings.value
+        if (settings.mode != AppMode.PATIENT || settings.sensorStartMs <= 0 || settings.clearSuspectMs > 0 || settings.newSensorSuspectMs > 0) return emptyList()
         val phase = sensorStatus(now)?.phase
         if (phase != null && phase != SensorPhase.ACTIVE) return emptyList()
         val recent = ClinicalGate.forDosing(readings(now - HOUR_MS, now))
@@ -187,13 +283,16 @@ object Repo {
         return recent
     }
 
+    @Synchronized
     fun latest(now: Long = System.currentTimeMillis()): GlucoseReading? = readings(now - 3 * HOUR_MS).lastOrNull()
 
+    @Synchronized
     fun iob(now: Long = System.currentTimeMillis()): Double {
         val t = _settings.value.therapy
         return InsulinMath.iob(db.doses(now - (t.diaHours * HOUR_MS).toLong()), now, t.diaHours)
     }
 
+    @Synchronized
     fun cob(now: Long = System.currentTimeMillis()): Double {
         val t = _settings.value.therapy
         return InsulinMath.cob(db.carbs(now - (t.carbAbsorptionHours * HOUR_MS).toLong()), now, t.carbAbsorptionHours)

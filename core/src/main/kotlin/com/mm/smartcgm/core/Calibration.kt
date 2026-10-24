@@ -41,6 +41,8 @@ data class Calibration(val slope: Double = 1.0, val offset: Double = 0.0) {
             }
 
         fun fit(pairs: List<Pair<Double, Double>>): Calibration {
+            if (pairs.any { !it.first.isFinite() || !it.second.isFinite() || it.first !in 20.0..600.0 || it.second !in 20.0..600.0 })
+                return fit(pairs.filter { it.first.isFinite() && it.second.isFinite() && it.first in 20.0..600.0 && it.second in 20.0..600.0 })
             if (pairs.isEmpty()) return IDENTITY
             if (pairs.size == 1) {
                 val (raw, meter) = pairs[0]

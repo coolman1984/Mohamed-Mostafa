@@ -39,6 +39,7 @@ Read the medicine box / strip in the photo (OCR). Reply ONLY with JSON:
 Corticosteroids and sugary syrups raise glucose; insulin and diabetes drugs lower it."""
 
     private fun call(key: String, model: String, prompt: String, photo: Bitmap): JSONObject {
+        require(model.matches(Regex("[A-Za-z0-9._-]{1,120}"))) { "اسم النموذج غير صالح" }
         val jpeg = ByteArrayOutputStream().also { photo.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
         val body = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray()
@@ -58,10 +59,10 @@ Corticosteroids and sugary syrups raise glucose; insulin and diabetes drugs lowe
         try {
             c.outputStream.use { it.write(body.toString().toByteArray()) }
             if (c.responseCode !in 200..299) {
-                val err = c.errorStream?.bufferedReader()?.readText().orEmpty()
-                throw IllegalStateException("خطأ من خدمة الذكاء الاصطناعي (${c.responseCode}): ${err.take(200)}")
+                val err = c.errorStream?.use { com.mm.smartcgm.net.BoundedBody.read(it) }.orEmpty()
+                throw IllegalStateException("خطأ من خدمة الذكاء الاصطناعي (${c.responseCode}): راجع المفتاح وإعدادات الخدمة")
             }
-            val resp = JSONObject(c.inputStream.bufferedReader().readText())
+            val resp = JSONObject(c.inputStream.use { com.mm.smartcgm.net.BoundedBody.read(it) })
             val text = resp.getJSONArray("candidates").getJSONObject(0)
                 .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
             return JSONObject(text.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim())
@@ -73,7 +74,10 @@ Corticosteroids and sugary syrups raise glucose; insulin and diabetes drugs lowe
     fun estimateMeal(key: String, model: String, photo: Bitmap): MealEstimate {
         val o = call(key, model, MEAL_PROMPT, photo)
         val items = o.optJSONArray("items")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
-        return MealEstimate(items, o.optDouble("carbs_g", 0.0), o.optDouble("calories", 0.0),
+        val carbs = o.optDouble("carbs_g", Double.NaN)
+        val calories = o.optDouble("calories", Double.NaN)
+        require(carbs.isFinite() && carbs in 0.0..300.0 && calories.isFinite() && calories in 0.0..10000.0) { "تقدير الصورة غير صالح — جرّب صورة أوضح" }
+        return MealEstimate(items, carbs, calories,
             o.optString("confidence", "low"), o.optString("notes"))
     }
 

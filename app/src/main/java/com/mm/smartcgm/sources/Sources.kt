@@ -29,7 +29,7 @@ import java.net.URL
 
 private fun ingestAsync(r: GlucoseReading) {
     if (Repo.settings.value.mode != AppMode.PATIENT) return
-    Pipeline.scope.launch { Repo.ingest(r) }
+    Pipeline.scope.launch { runCatching { Repo.ingest(r) } }
 }
 
 /*
@@ -51,17 +51,16 @@ class GlucoseBroadcastReceiver : BroadcastReceiver() {
         val now = System.currentTimeMillis()
         val r = when (intent.action) {
             JUGGLUCO -> {
-                val mgdl = intent.getIntExtra("glucodata.Minute.mgdl", 0)
-                    .takeIf { it > 0 }?.toDouble()
-                    ?: intent.getFloatExtra("glucodata.Minute.glucose", 0f).toDouble().takeIf { it > 0 }?.let {
-                        if (it < 35) it * 18.0182 else it // value is mmol/L when the user set that unit
-                    }
+                // The verified contract supplies an explicit mg/dL integer. Missing units are not guessed.
+                val mgdl = intent.getIntExtra("glucodata.Minute.mgdl", 0).takeIf { it > 0 }?.toDouble()
+                if (!intent.hasExtra("glucodata.Minute.Time")) return
                 mgdl?.let {
                     GlucoseReading(intent.getLongExtra("glucodata.Minute.Time", now), it, "juggluco",
                         intent.getStringExtra("glucodata.Minute.SerialNumber"))
                 }
             }
             XDRIP -> {
+                if (!intent.hasExtra("com.eveningoutpost.dexdrip.Extras.Time")) return
                 val v = intent.getDoubleExtra("com.eveningoutpost.dexdrip.Extras.BgEstimate", 0.0)
                 v.takeIf { it > 0 }?.let {
                     GlucoseReading(intent.getLongExtra("com.eveningoutpost.dexdrip.Extras.Time", now), it, "xdrip-broadcast",
@@ -70,7 +69,13 @@ class GlucoseBroadcastReceiver : BroadcastReceiver() {
             }
             else -> null
         }
-        r?.let(::ingestAsync)
+        r?.let { reading ->
+            if (Repo.settings.value.mode != AppMode.PATIENT) return
+            val pending = goAsync()
+            Pipeline.scope.launch {
+                try { runCatching { Repo.ingest(reading) } } finally { pending?.finish() }
+            }
+        }
     }
 }
 
@@ -106,21 +111,29 @@ object JugglucoWebSource {
         java.security.MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
     /** @return HTTP status (0 = not reachable) so the health card can explain what is wrong. */
+    private var lastSuccessfulPollMs = 0L
     fun poll(apiSecret: String = ""): Int {
-        val c = URL(URL_ENTRIES).openConnection() as HttpURLConnection
+        if (Repo.settings.value.mode != AppMode.PATIENT) return 0
+        val now = System.currentTimeMillis()
+        val recovery = lastSuccessfulPollMs == 0L || now < lastSuccessfulPollMs || now - lastSuccessfulPollMs > 25 * 60_000L
+        val endpoint = if (recovery) URL_ENTRIES.replace("count=30", "count=1440") else URL_ENTRIES
+        val c = URL(endpoint).openConnection() as HttpURLConnection
         c.connectTimeout = 2000
         c.readTimeout = 3000
         if (apiSecret.isNotBlank()) c.setRequestProperty("api-secret", sha1Hex(apiSecret.trim()))
         try {
             val code = c.responseCode
             if (code != 200) return code
-            val arr = JSONArray(c.inputStream.bufferedReader().readText())
+            val arr = JSONArray(c.inputStream.use { com.mm.smartcgm.net.BoundedBody.read(it) })
+            val samples = mutableListOf<GlucoseReading>()
             for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val sgv = o.optDouble("sgv", 0.0)
+                val o = arr.optJSONObject(i) ?: continue
+                val sgv = o.optDouble("sgv", Double.NaN)
                 val t = o.optLong("date", 0)
-                if (sgv > 0 && t > 0) Repo.ingest(GlucoseReading(t, sgv, "juggluco-web"))
+                if (sgv.isFinite() && sgv in 20.0..600.0 && t > 0) samples += GlucoseReading(t, sgv, "juggluco-web")
             }
+            samples.sortedBy { it.timeMs }.forEach { Repo.ingest(it) }
+            lastSuccessfulPollMs = now
             return code
         } catch (e: java.io.IOException) {
             return 0

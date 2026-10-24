@@ -10,9 +10,10 @@ export function makeDb() {
     first: async () => s.prepare(sql).get(...args) ?? null,
     all: async () => ({ results: s.prepare(sql).all(...args) }),
     run: async () => s.prepare(sql).run(...args),
+    runSync: () => s.prepare(sql).run(...args),
   });
   return {
     prepare: (sql) => stmt(sql),
-    batch: async (list) => { s.exec('BEGIN'); try { for (const x of list) await x.run(); s.exec('COMMIT'); } catch (e) { s.exec('ROLLBACK'); throw e; } },
+    batch: async (list) => { s.exec('BEGIN'); try { const results = list.map((x) => x.runSync()); s.exec('COMMIT'); return results; } catch (e) { s.exec('ROLLBACK'); throw e; } },
   };
 }

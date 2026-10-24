@@ -26,11 +26,9 @@ object Pipeline {
 
     private const val ALERT_STATE_KEY = "alertState"
 
-    /** Persisted so a process restart neither forgets snoozes nor re-spams alerts that just fired (P1-2). */
-    @Volatile private var loaded: AlertState? = null
     private var alertState: AlertState
-        get() = loaded ?: AlertStateCodec.decode(Repo.store.getString(ALERT_STATE_KEY)).also { loaded = it }
-        set(v) { loaded = v; Repo.store.putString(ALERT_STATE_KEY, AlertStateCodec.encode(v)) }
+        get() = AlertStateCodec.decode(Repo.store.getString("$ALERT_STATE_KEY:${Repo.profile}"))
+        set(v) { Repo.store.putString("$ALERT_STATE_KEY:${Repo.profile}", AlertStateCodec.encode(v)) }
 
     fun onNewReading(ctx: Context) {
         evaluate(ctx)
@@ -50,16 +48,16 @@ object Pipeline {
                 if (s.followRole == FollowerRole.ADMIN) evaluate(ctx)
             }
         } else {
-            scope.launch { runCatching { CloudSync.pullAdminEvents(s) }; runCatching { CloudSync.pullThresholdProposal(s) } }
+            scope.launch { runCatching { CloudSync.pullAdminEvents(s) }; runCatching { CloudSync.pullThresholdProposal(s) }; runCatching { CloudSync.pushLatest(s) } }
             evaluate(ctx)
         }
     }
 
-    @Synchronized
-    fun evaluate(ctx: Context) {
+    fun evaluate(ctx: Context) = synchronized(Repo) {
         val now = System.currentTimeMillis()
         val s = Repo.settings.value
-        val recent = ClinicalGate.forDosing(Repo.readings(now - HOUR_MS, now))
+        if (s.mode == AppMode.FOLLOWER && s.followRole != FollowerRole.ADMIN) return@synchronized
+        val recent = Repo.alarmReadings(now)
         val forecast = Prediction.forecast(recent, s.alerts.low.thresholdMgdl)
         val (alerts, next) = AlertEngine.evaluate(ClinicalGate.forAlarm(recent, now, s.alerts.staleMinutes * 60_000L), forecast, Repo.sensorStatus(now),
             s.alerts.copy(unit = s.unit), alertState, now)
@@ -70,8 +68,7 @@ object Pipeline {
         alerts.filterNot { neverHadData && it.type == AlertType.SIGNAL_LOST }.forEach { Alarms.show(ctx, it) }
     }
 
-    @Synchronized
-    fun snooze(type: AlertType, minutes: Int) {
+    fun snooze(type: AlertType, minutes: Int) = synchronized(Repo) {
         alertState = AlertEngine.snooze(alertState, type, minutes, System.currentTimeMillis())
     }
 }

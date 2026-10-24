@@ -42,7 +42,7 @@ fun AnalyticsScreen() {
     var days by remember { mutableIntStateOf(14) }
     val now = System.currentTimeMillis()
     val readings = remember(key, days) { Repo.readings(now - days * DAY_MS) }
-    val st = remember(readings) { Stats.compute(readings, s.therapy.lowMgdl, s.therapy.highMgdl) }
+    val st = remember(readings, s.therapy.lowMgdl, s.therapy.highMgdl) { Stats.compute(readings, s.therapy.lowMgdl, s.therapy.highMgdl) }
     val agp = remember(readings) { Stats.agp(readings) }
     val coverage = remember(readings) { Stats.coveragePercent(readings, now - days * DAY_MS, now) }
     val overlays = remember(readings) { Stats.dailyOverlays(readings).takeLast(14) }
@@ -56,12 +56,12 @@ fun AnalyticsScreen() {
         if (st == null) {
             Text("📭 مفيش قراءات كفاية لسه.", Modifier.padding(16.dp)); return@Column
         }
-        val u = Repo.settings.value.unit
-        SectionCard("🎯 الوقت في النطاق (${u.format(70.0)}–${u.format(180.0)})") {
+        val u = s.unit
+        SectionCard("🎯 الوقت في النطاق (${u.format(s.therapy.lowMgdl)}–${u.format(s.therapy.highMgdl)})") {
             TirBar(st.veryLowPct, st.lowPct, st.inRangePct, st.highPct, st.veryHighPct)
             Text("🟢 في النطاق: %.0f%%  (الهدف أكتر من 70%%)".format(st.inRangePct), fontWeight = FontWeight.Bold)
-            Text("🔴 تحت ${u.format(70.0)}: %.1f%%  (منهم أقل من ${u.format(54.0)}: %.1f%%) — الهدف أقل من 4%%".format(st.lowPct + st.veryLowPct, st.veryLowPct))
-            Text("🟠 فوق ${u.format(180.0)}: %.0f%%  (منهم فوق ${u.format(250.0)}: %.0f%%)".format(st.highPct + st.veryHighPct, st.veryHighPct))
+            Text("🔴 تحت ${u.format(s.therapy.lowMgdl)}: %.1f%%  (منهم أقل من ${u.format(minOf(54.0, s.therapy.lowMgdl))}: %.1f%%) — الهدف أقل من 4%%".format(st.lowPct + st.veryLowPct, st.veryLowPct))
+            Text("🟠 فوق ${u.format(s.therapy.highMgdl)}: %.0f%%  (منهم فوق ${u.format(maxOf(250.0, s.therapy.highMgdl))}: %.0f%%)".format(st.highPct + st.veryHighPct, st.veryHighPct))
         }
         SectionCard("🧪 المؤشرات") {
             Text("📊 متوسط السكر: ${u.formatWithUnit(st.meanMgdl)}")

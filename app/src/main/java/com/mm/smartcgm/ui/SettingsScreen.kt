@@ -73,7 +73,7 @@ private fun fmtNum(v: Double) = if (v % 1.0 == 0.0) "%.0f".format(java.util.Loca
 private fun NumField(label: String, value: Double, modifier: Modifier = Modifier, onChange: (Double) -> Unit) {
     var t by remember(value) { mutableStateOf(fmtNum(value)) }
     var focused by remember { mutableStateOf(false) }
-    fun commit() { t.replace(',', '.').replace('٫', '.').toDoubleOrNull()?.takeIf { it > 0 && it != value }?.let(onChange) }
+    fun commit() { com.mm.smartcgm.core.UserNumber.parse(t)?.takeIf { it > 0 && it != value }?.let(onChange) }
     OutlinedTextField(t, { t = it },
         label = { Text(label) }, singleLine = true,
         modifier = modifier.padding(2.dp).onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
@@ -152,7 +152,7 @@ fun SettingsScreen() {
                     OutlinedTextField(days, { days = it }, label = { Text("أو: اتركب من كام يوم؟") }, singleLine = true,
                         modifier = Modifier.weight(1f),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    val d = days.replace(',', '.').toDoubleOrNull()?.takeIf { it in 0.0..30.0 }
+                    val d = com.mm.smartcgm.core.UserNumber.parse(days)?.takeIf { it in 0.0..30.0 }
                     Button(enabled = d != null, onClick = {
                         upd { it.copy(sensorStartMs = System.currentTimeMillis() - (d!! * DAY_MS).toLong()) }; days = ""
                     }) { Text("✔️ تأكيد") }

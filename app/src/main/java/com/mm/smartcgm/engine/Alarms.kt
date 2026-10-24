@@ -87,7 +87,7 @@ object Alarms {
         if (a.critical) n.setDeleteIntent(ackIntent(ctx, a.type))
         if (a.critical) n.setFullScreenIntent(fullScreen(ctx, a), true)
         runCatching { nm.notify(1000 + a.type.ordinal, n.build()) }
-        if (a.critical) playCritical(ctx)
+        if (a.critical) playCritical(ctx, a.type)
     }
 
     /**
@@ -95,7 +95,9 @@ object Alarms {
      * (notification action, swipe, snooze, or opening the app), as AGENTS.md P1-2 requires.
      */
     @Synchronized
-    private fun playCritical(ctx: Context) {
+    private fun playCritical(ctx: Context, type: AlertType) {
+        if (activeSoundType == AlertType.URGENT_LOW && type != AlertType.URGENT_LOW) return
+        activeSoundType = type
         if (runCatching { player?.isPlaying == true }.getOrDefault(false)) return // already ringing
         runCatching {
             player?.release()
@@ -115,9 +117,24 @@ object Alarms {
     }
 
     private var vibrator: Vibrator? = null
+    var activeSoundType: AlertType? = null
+        private set
+
+    @Synchronized
+    fun acknowledge(type: AlertType) {
+        if (activeSoundType != type) return
+        activeSoundType = null
+        releaseSound()
+    }
 
     @Synchronized
     fun stopSound() {
+        if (activeSoundType == AlertType.URGENT_LOW) return
+        activeSoundType = null
+        releaseSound()
+    }
+
+    private fun releaseSound() {
         runCatching { player?.stop(); player?.release() }; player = null
         runCatching { vibrator?.cancel() }; vibrator = null
     }

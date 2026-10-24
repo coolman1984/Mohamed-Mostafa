@@ -46,7 +46,8 @@ class ScreensTest {
     private val ctx get() = ApplicationProvider.getApplicationContext<android.app.Application>()
 
     @Before fun seed() {
-        ctx.deleteDatabase("smartcgm.db")
+        ctx.databaseList().forEach { ctx.deleteDatabase(it) }
+        ctx.getSharedPreferences("settings", 0).edit().clear().commit()
         Repo.init(ctx)
         Repo.sourceSeen.clear()
         val now = System.currentTimeMillis()

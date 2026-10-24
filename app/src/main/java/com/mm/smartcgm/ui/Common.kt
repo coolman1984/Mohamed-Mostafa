@@ -101,7 +101,7 @@ fun NumberDialog(title: String, label: String, onDismiss: () -> Unit, onOk: (Dou
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
         },
         confirmButton = {
-            TextButton(onClick = { text.replace(',', '.').toDoubleOrNull()?.let { onOk(it); onDismiss() } }) { Text("حفظ ✅") }
+            TextButton(onClick = { com.mm.smartcgm.core.UserNumber.parse(text)?.let { onOk(it); onDismiss() } }) { Text("حفظ ✅") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } },
     )
