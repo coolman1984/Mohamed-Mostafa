@@ -26,3 +26,11 @@ APK, captures, or decompiled/native code to any public service or repo.
 ## Provenance rule
 Every protocol claim added to `linx-protocol.md` must cite: artifact digest + file/function/offset or packet index,
 a cross-check, and a confidence flag. A guess is not evidence.
+
+## Pinned source investigation
+
+Six Juggluco source files at `e41f4aa239d389bee78cdb8fc7d0dbe9ceb4df53` were inspected.
+See `juggluco-source-map.md` for functions, claims, counter-checks and the F005 visibility gap.
+This is SOURCE_CONFIRMED reference behavior only, not a device result. No raw artifacts or reference
+implementation have been committed. The real APK/native-analysis providers were not run because
+no authorized APK was available.

@@ -54,7 +54,7 @@ fun HomeScreen() {
     val recent = remember(key) { Repo.readings(now - 3 * HOUR_MS) }
     val last = recent.lastOrNull()
     val arrow = remember(key) { Trend.arrow(recent) }
-    val forecast = remember(key) { Prediction.forecast(recent, s.alerts.low.thresholdMgdl) }
+    val forecast = remember(key) { Prediction.forecast(Repo.dosingReadings(now), s.alerts.low.thresholdMgdl) }
     val sensor = remember(key) { Repo.sensorStatus(now) }
     val iob = remember(key) { Repo.iob(now) }
     val cob = remember(key) { Repo.cob(now) }
@@ -93,6 +93,7 @@ fun HomeScreen() {
                         Text(" ${arrow.symbol}", fontSize = 56.sp, color = color)
                     }
                     Text("${s.unit.label} • ${arrow.arabic}")
+                    if (sensor?.phase == SensorPhase.EXTENDED) Text("🧪 الحساس عدّى عمره المحدد — القراءة غير معتمدة للجرعات", color = Red)
                     if (BleReadingValidator.isStale(last, now)) Text("⚠️ آخر قراءة معروفة — البيانات مش حية", color = Red)
                     val ago = (now - last.timeMs) / 60_000
                     Text(if (ago < 1) "🕐 دلوقتي" else "🕐 من $ago دقيقة", style = MaterialTheme.typography.bodySmall)

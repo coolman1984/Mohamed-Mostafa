@@ -7,7 +7,7 @@
 ## Current overall status: **BLOCKED_PENDING_OWNER_INPUT**
 
 No APK, no QR/data-matrix sample, and no Bluetooth HCI snoop log have been provided to this analysis, and no
-on-device capture has been run. Therefore **every wire-level field below is UNKNOWN here** and the shipped
+on-device capture has been run. The pinned reference study now confirms several source-level behaviors (see `linx-re-evidence/juggluco-source-map.md`), but no field is verified on the owner sensor. The shipped
 codec/pairing refuse to run (`ProtocolNotEvidenced`). This document is the frame to be filled by the owner-run
 investigation; it does not assert a protocol.
 
@@ -16,7 +16,7 @@ What is built and testable today (no device needed):
 - `core/ClinicalGate` — keeps experimental readings out of clinical consumers; integrated via quarantine + dose/alarm gates.
 - `sources/linx/*` — the read-only source boundary, disabled until a verified codec is wired in.
 
-## Evidence table (to be completed from the owner's authorized capture)
+## Device evidence table (reference findings are documented separately)
 
 | Domain | Claim from prior reports (UNVERIFIED) | Status here | Needed to confirm |
 |---|---|---|---|
