@@ -20,9 +20,11 @@ import com.mm.smartcgm.core.GlucoseUnit
 import com.mm.smartcgm.core.InsulinDose
 import com.mm.smartcgm.data.Repo
 import com.mm.smartcgm.ui.AnalyticsScreen
+import com.mm.smartcgm.ui.BolusDialog
 import com.mm.smartcgm.ui.HomeScreen
 import com.mm.smartcgm.ui.LogbookScreen
 import com.mm.smartcgm.ui.SettingsScreen
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -80,10 +82,24 @@ class ScreensTest {
     private fun has(text: String) = rule.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     @Test fun home() {
+        // A clinical forecast is shown only while the sensor remains within its specified life.
+        Repo.updateSettings { it.copy(sensorStartMs = System.currentTimeMillis() - 3 * 86_400_000L) }
         shot("01-home") { HomeScreen() }
         assertTrue(has("متوقع هبوط"))
         assertTrue(has("البيانات بتوصل كويس"))
         assertTrue(has("غيّر") || has("15"))
+    }
+
+    @Test fun extendedSensorShowsNonActionableWarningInsteadOfClinicalForecast() {
+        shot("01b-home-extended") { HomeScreen() }
+        assertTrue(has("غير معتمدة للجرعات"))
+        assertFalse(has("متوقع هبوط"))
+    }
+
+    @Test fun doseDialogRefusesExtendedSensorReadings() {
+        shot("01c-dose-blocked") { BolusDialog {} }
+        assertTrue(has("حساب الجرعة متوقف"))
+        assertFalse(has("المقترح:"))
     }
 
     @Test fun homeMmol() {
