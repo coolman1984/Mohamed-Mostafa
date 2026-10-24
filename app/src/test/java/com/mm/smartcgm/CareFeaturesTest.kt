@@ -46,8 +46,10 @@ class CareFeaturesTest {
     private val now = System.currentTimeMillis()
 
     @Before fun fresh() {
-        ctx.deleteDatabase("smartcgm.db")
+        ctx.databaseList().forEach { ctx.deleteDatabase(it) }
+        ctx.getSharedPreferences("settings", 0).edit().clear().commit()
         Repo.init(ctx)
+        Repo.updateSettings { it.copy(backendUrl = "") }
         AlarmActivity.acknowledged = false
     }
 

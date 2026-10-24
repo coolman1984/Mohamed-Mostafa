@@ -63,7 +63,7 @@ class ReviewFixesTest {
         val t0 = 1_000_000L
         val iobWithNegative = InsulinMath.iob(listOf(InsulinDose(t0, 4.0), InsulinDose(t0, -4.0)), t0 + 60 * MINUTE_MS, 4.0)
         val iobClean = InsulinMath.iob(listOf(InsulinDose(t0, 4.0)), t0 + 60 * MINUTE_MS, 4.0)
-        assertTrue(iobWithNegative < iobClean)
+        assertEquals(iobClean, iobWithNegative) // legacy invalid records are now excluded at the math boundary
     }
 
     @Test fun frozenNotificationStopsCountingAsLive() {

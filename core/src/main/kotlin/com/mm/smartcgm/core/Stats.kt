@@ -57,8 +57,9 @@ object Stats {
      * The international consensus (Battelino 2019) wants ≥ 70% over 14 days before a report is trusted.
      */
     fun coveragePercent(readings: List<GlucoseReading>, fromMs: Long, toMs: Long, slotMs: Long = 5 * MINUTE_MS): Double {
-        if (toMs <= fromMs) return 0.0
-        val total = ((toMs - fromMs) / slotMs).coerceAtLeast(1)
+        if (toMs <= fromMs || slotMs <= 0) return 0.0
+        val duration = toMs - fromMs
+        val total = duration / slotMs + if (duration % slotMs == 0L) 0 else 1
         val filled = readings.asSequence().filter { it.timeMs in fromMs until toMs }
             .map { (it.timeMs - fromMs) / slotMs }.toSet().size
         return filled * 100.0 / total

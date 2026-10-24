@@ -39,15 +39,19 @@ object BolusAdvisor {
     ): BolusSuggestion {
         val warnings = mutableListOf<String>()
         // Corrupt settings or inputs (0, negative, NaN) would turn into an infinite or negative dose: refuse instead.
-        val bad = !(settings.icr > 0) || !(settings.isf > 0) || !(settings.maxBolusUnits > 0) ||
-            !carbsGrams.isFinite() || !iobUnits.isFinite() || (currentMgdl != null && !currentMgdl.isFinite())
+        val bad = settings.icr !in SafeLimits.ICR || settings.isf !in SafeLimits.ISF || settings.maxBolusUnits !in SafeLimits.MAX_BOLUS ||
+            !settings.icr.isFinite() || !settings.isf.isFinite() || !settings.maxBolusUnits.isFinite() ||
+            !settings.targetMgdl.isFinite() || !settings.lowMgdl.isFinite() || settings.lowMgdl < 55 ||
+            !carbsGrams.isFinite() || carbsGrams < 0 || carbsGrams > SafeLimits.MAX_CARBS_G ||
+            !iobUnits.isFinite() || iobUnits < 0 ||
+            (currentMgdl != null && (!currentMgdl.isFinite() || currentMgdl !in 20.0..600.0))
         if (bad) {
             warnings += "إعدادات أو أرقام غير صالحة: راجع ICR و ISF وأقصى جرعة في الإعدادات."
             return BolusSuggestion(0.0, 0.0, iobUnits, 0.0, false, false, true, warnings)
         }
         val meal = max(0.0, carbsGrams) / settings.icr
 
-        if (currentMgdl != null && (currentMgdl < settings.lowMgdl || predictedLow)) {
+        if (predictedLow || (currentMgdl != null && currentMgdl < maxOf(55.0, settings.lowMgdl))) {
             warnings += "السكر منخفض أو متوقع ينخفض: ممنوع أي جرعة دلوقتي — عالج الهبوط الأول."
             return BolusSuggestion(meal, 0.0, iobUnits, 0.0, false, false, true, warnings)
         }

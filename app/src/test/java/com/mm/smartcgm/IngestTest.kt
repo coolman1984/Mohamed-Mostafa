@@ -24,8 +24,10 @@ class IngestTest {
     private val now = System.currentTimeMillis()
 
     @Before fun fresh() {
-        ctx.deleteDatabase("smartcgm.db")
+        ctx.databaseList().forEach { ctx.deleteDatabase(it) }
+        ctx.getSharedPreferences("settings", 0).edit().clear().commit()
         Repo.init(ctx)
+        Repo.updateSettings { it.copy(backendUrl = "") }
     }
 
     /** Broadcast ingest runs on the pipeline coroutine scope; wait (max 10 s) for it to land. */

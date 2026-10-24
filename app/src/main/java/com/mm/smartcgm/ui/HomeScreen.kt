@@ -186,11 +186,11 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
     val iob = Repo.iob(now)
     val predictedLow = Prediction.forecast(eligible, s.alerts.low.thresholdMgdl)?.minutesToLow != null
     var carbs by remember { mutableStateOf(if (initialCarbs > 0) "%.0f".format(initialCarbs) else "") }
-    val typed = carbs.replace(',', '.').replace('٫', '.').toDoubleOrNull()
+    val typed = com.mm.smartcgm.core.UserNumber.parse(carbs)
     // Out-of-range carbs (typo "600", negative, NaN) give no dose instead of a capped big one.
-    val carbsOk = typed == null || typed == 0.0 || SafeLimits.validCarbs(typed)
+    val carbsOk = carbs.isBlank() || (typed != null && (typed == 0.0 || SafeLimits.validCarbs(typed)))
     val g = if (carbsOk) typed ?: 0.0 else 0.0
-    val sug = BolusAdvisor.suggest(g, currentMgdl, iob, s.therapy, predictedLow)
+    val sug = BolusAdvisor.suggest(if (carbsOk) g else Double.NaN, currentMgdl, iob, s.therapy, predictedLow)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("🧮 الجرعة المقترحة") },

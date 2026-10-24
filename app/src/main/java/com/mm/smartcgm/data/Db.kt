@@ -14,7 +14,7 @@ import com.mm.smartcgm.core.MedicationEntry
 import com.mm.smartcgm.core.ReadingTrust
 
 /** Local store. Readings keep the RAW sensor value; calibration is applied on read. */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) {
+class Db(ctx: Context, name: String = "smartcgm.db", private val localOnly: Boolean = true) : SQLiteOpenHelper(ctx, name, null, DB_VERSION) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE readings(time INTEGER PRIMARY KEY, mgdl REAL, source TEXT, sensor TEXT)")
@@ -24,6 +24,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         db.execSQL("CREATE TABLE meds(time INTEGER, name TEXT, ingredient TEXT, effect TEXT)")
         createIndexes(db)
         createExperimentalTable(db)
+        createEventReceipts(db)
     }
 
     /**
@@ -32,6 +33,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createIndexes(db)
+        if (oldVersion < 4) createEventReceipts(db)
         if (oldVersion < 3) {
             createExperimentalTable(db)
             // Relocate earlier scaffold samples atomically; preserve every original value.
@@ -51,7 +53,31 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         db.execSQL("CREATE TABLE IF NOT EXISTS experimental_readings(time INTEGER PRIMARY KEY, mgdl REAL, source TEXT, sensor TEXT)")
     }
 
-    companion object { const val DB_VERSION = 3 }
+    private fun createEventReceipts(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS imported_events(id TEXT PRIMARY KEY)")
+    }
+
+    companion object { const val DB_VERSION = 4 }
+
+    /** Commit receipt and medical log together, before acknowledging the remote event. */
+    @Synchronized
+    fun importRemoteEvent(key: String, type: String, value: Double, timeMs: Long): Boolean {
+        if (timeMs <= 0 || (type != "dose" && type != "carbs")) return false
+        if (type == "dose" && !com.mm.smartcgm.core.SafeLimits.validDose(value)) return false
+        if (type == "carbs" && !com.mm.smartcgm.core.SafeLimits.validCarbs(value)) return false
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val receipt = ContentValues().apply { put("id", key) }
+            val added = db.insertWithOnConflict("imported_events", null, receipt, SQLiteDatabase.CONFLICT_IGNORE) != -1L
+            if (added) {
+                if (type == "dose") addDose(InsulinDose(timeMs, value))
+                else addCarbs(CarbEntry(timeMs, value, "من المتابع"))
+            }
+            db.setTransactionSuccessful()
+            return added
+        } finally { db.endTransaction() }
+    }
 
     /** Returns false if a reading already exists within ±30 s (same value from two sources). */
     @Synchronized
@@ -68,7 +94,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
     }
 
     fun readings(fromMs: Long, toMs: Long = Long.MAX_VALUE): List<GlucoseReading> =
-        readableDatabase.rawQuery("SELECT time, mgdl, source, sensor FROM readings WHERE time BETWEEN ? AND ? ORDER BY time",
+        readableDatabase.rawQuery("SELECT time, mgdl, source, sensor FROM readings WHERE time BETWEEN ? AND ? ${if (localOnly) "AND (source IS NULL OR source != 'cloud')" else ""} ORDER BY time",
             arrayOf(fromMs.toString(), toMs.toString())).use { c ->
             buildList { while (c.moveToNext()) add(GlucoseReading(c.getLong(0), c.getDouble(1), c.getString(2) ?: "", c.getString(3)).withDerivedTrust()) }
         }
@@ -93,7 +119,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
     /** P2-1 "undo calibration": removes every finger-stick from [fromMs] on, so raw sensor values are shown again. */
     fun deleteSticksSince(fromMs: Long) { writableDatabase.delete("sticks", "time >= ?", arrayOf(fromMs.toString())) }
 
-    fun lastReadingTime(): Long? = readableDatabase.rawQuery("SELECT MAX(time) FROM readings", null).use { c ->
+    fun lastReadingTime(): Long? = readableDatabase.rawQuery("SELECT MAX(time) FROM readings ${if (localOnly) "WHERE source IS NULL OR source != 'cloud'" else ""}", null).use { c ->
         if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
     }
 
@@ -103,7 +129,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         }
 
     fun addDose(d: InsulinDose) {
-        writableDatabase.insert("doses", null, ContentValues().apply {
+        require(com.mm.smartcgm.core.SafeLimits.validDose(d.units) && d.timeMs > 0) { "Invalid dose" }
+        writableDatabase.insertOrThrow("doses", null, ContentValues().apply {
             put("time", d.timeMs); put("units", d.units); put("kind", d.kind.name)
         })
     }
@@ -114,7 +141,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "smartcgm.db", null, DB_VERSION) 
         }
 
     fun addCarbs(e: CarbEntry) {
-        writableDatabase.insert("carbs", null, ContentValues().apply {
+        require(com.mm.smartcgm.core.SafeLimits.validCarbs(e.grams) && e.timeMs > 0) { "Invalid carbs" }
+        writableDatabase.insertOrThrow("carbs", null, ContentValues().apply {
             put("time", e.timeMs); put("grams", e.grams); put("note", e.note)
         })
     }

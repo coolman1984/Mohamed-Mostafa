@@ -29,13 +29,13 @@ object InsulinMath {
     }
 
     fun iob(doses: List<InsulinDose>, nowMs: Long, diaHours: Double): Double =
-        doses.filter { it.kind == InsulinKind.RAPID && it.timeMs <= nowMs }
+        doses.filter { it.kind == InsulinKind.RAPID && it.timeMs > 0 && it.timeMs <= nowMs && SafeLimits.validDose(it.units) }
             .sumOf { it.units * iobFraction((nowMs - it.timeMs) / MINUTE_MS.toDouble(), diaHours) }
             .let { max(0.0, it) }
 
     /** Linear absorption over [absorptionHours]. */
     fun cob(carbs: List<CarbEntry>, nowMs: Long, absorptionHours: Double): Double =
-        carbs.filter { it.timeMs <= nowMs }.sumOf {
+        carbs.filter { it.timeMs > 0 && it.timeMs <= nowMs && SafeLimits.validCarbs(it.grams) }.sumOf {
             val frac = (nowMs - it.timeMs) / (absorptionHours * HOUR_MS)
             it.grams * (1 - frac).coerceIn(0.0, 1.0)
         }

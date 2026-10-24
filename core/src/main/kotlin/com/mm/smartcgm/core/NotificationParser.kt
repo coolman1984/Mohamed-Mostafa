@@ -35,20 +35,28 @@ object NotificationParser {
     /** Returns mg/dL or null. */
     fun parse(text: String?): Double? {
         if (text.isNullOrBlank()) return null
-        val t = text.map { ARABIC_DIGITS[it] ?: it }.joinToString("")
+        val t = UserNumber.normalize(text)
         val lower = t.lowercase()
         // Ignore times like 12:45 so they aren't mistaken for glucose.
         val clean = lower.replace(Regex("""\d{1,2}:\d{2}"""), " ")
-        val isMmol = "mmol" in clean
-        if (isMmol || !clean.contains("mg")) {
-            MMOL.find(clean)?.let {
-                val v = it.groupValues[1].replace(',', '.').toDouble()
-                if (v in 1.0..35.0) return v * 18.0182
-            }
+        // An explicit unit binds to its own number, never a battery percentage or other text before it.
+        if ("mmol" in clean || "mg" in clean) {
+            val unit = Regex("""(?<![\d.,-])(\d{1,3}(?:[.,]\d+)?)\s*(mmol(?:/l)?|mg(?:/dl)?)""")
+            val values = unit.findAll(clean).mapNotNull {
+                val value = it.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return@mapNotNull null
+                val mgdl = if (it.groupValues[2].startsWith("mmol")) value * 18.0182 else value
+                mgdl.takeIf { g -> g in 20.0..600.0 }
+            }.distinct().toList()
+            return values.singleOrNull()
         }
-        MGDL.findAll(clean).map { it.groupValues[1].toDouble() }
-            .firstOrNull { it in 39.0..500.0 }?.let { return it }
-        return null
+        val withoutPercent = clean.replace(Regex("""\d+(?:[.,]\d+)?\s*%"""), " ")
+        val mmolValues = MMOL.findAll(withoutPercent).mapNotNull {
+            it.groupValues[1].replace(',', '.').toDoubleOrNull()?.takeIf { v -> v in 1.0..35.0 }?.times(18.0182)
+        }.distinct().toList()
+        if (mmolValues.isNotEmpty()) return mmolValues.singleOrNull()
+        val integers = MGDL.findAll(withoutPercent).map { it.groupValues[1].toDouble() }
+            .filter { it in 20.0..600.0 }.distinct().toList()
+        return integers.singleOrNull()
     }
 }
 
@@ -71,12 +79,16 @@ class FrozenNotificationGuard(private val maxSameMs: Long = 20 * MINUTE_MS) {
     @Synchronized
     fun accept(pkg: String, text: String, nowMs: Long): Boolean {
         val lower = text.lowercase()
-        if (STALE_WORDS.any { it in lower }) return false
+        if (STALE_WORDS.any { it in lower }) { firstSeen.remove(pkg); return false }
+        val normalized = UserNumber.normalize(lower)
+        val age = Regex("""(\d+)\s*(?:min(?:ute)?s?\s+ago|دقايق|دقيقة)""")
+        if (age.findAll(normalized).any { (it.groupValues[1].toLongOrNull() ?: Long.MAX_VALUE) > 5 }) return false
+        val fingerprint = normalized.replace(age, "age").replace(Regex("""\d{1,2}:\d{2}(?::\d{2})?"""), "time")
         val prev = firstSeen[pkg]
-        if (prev == null || prev.first != text) {
-            firstSeen[pkg] = text to nowMs
+        if (prev == null || prev.first != fingerprint) {
+            firstSeen[pkg] = fingerprint to nowMs
             return true
         }
-        return nowMs - prev.second < maxSameMs
+        return nowMs >= prev.second && nowMs - prev.second < maxSameMs
     }
 }

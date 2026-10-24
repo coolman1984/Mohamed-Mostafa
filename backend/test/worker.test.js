@@ -120,7 +120,7 @@ test('readings carry optional source/serial/ageDays/trend; legacy tuples still w
     { t: now, mgdl: 112, trend: 'up!!' },
   ] } });
   assert.deepEqual(up.body, { stored: 2, rejected: 2 });
-  assert.deepEqual((await call('GET', `/v1/p/${PID}/readings`, { token: v })).body.readings, [[now - 120000, 100], [now - 60000, 110]]);
+  assert.deepEqual((await call('GET', `/v1/p/${PID}/readings`, { token: v })).body.readings, [[now - 120000, 100]]);
   const full = (await call('GET', `/v1/p/${PID}/readings?format=full`, { token: v })).body.readings;
   assert.deepEqual(full, [{ t: now - 120000, mgdl: 100 },
     { t: now - 60000, mgdl: 110, source: 'linx_ble', serial: 'GX01S-ABC123', ageDays: 11.5, trend: 'rising' }]);
@@ -143,4 +143,46 @@ test('batch backfill is idempotent and keeps existing rows', async () => {
   assert.equal(full[0].mgdl, 100);
   assert.equal((await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: new Array(1441).fill([now, 100]) } })).status, 400);
   assert.equal((await call('POST', `/v1/p/${PID}/readings/batch`, { token: OWNER, body: { readings: [[now - 31 * 86400_000, 100]] } })).body.rejected, 1);
+});
+
+test('one invite cannot be redeemed concurrently by two followers', async () => {
+  const { call } = setup();
+  await call('POST', `/v1/p/${PID}/register`, { body: { token: OWNER } });
+  const inv = await call('POST', `/v1/p/${PID}/invites`, { token: OWNER, body: { role: 'ADMIN' } });
+  const attempts = await Promise.all(Array.from({ length: 12 }, () => call('POST', '/v1/invites/redeem', { body: { code: inv.body.code } })));
+  assert.equal(attempts.filter((r) => r.status === 200).length, 1);
+  assert.equal((await call('GET', `/v1/p/${PID}/followers`, { token: OWNER })).body.followers.length, 1);
+});
+
+test('racing owner claims never produce two owners', async () => {
+  const { call } = setup();
+  const other = 'b'.repeat(64);
+  const attempts = await Promise.all([OWNER, other].map((token) => call('POST', `/v1/p/${PID}/register`, { body: { token } })));
+  assert.equal(attempts.filter((r) => r.status === 201).length, 1);
+  assert.equal(attempts.filter((r) => r.status === 409).length, 1);
+  const statuses = await Promise.all([OWNER, other].map((token) => call('GET', `/v1/p/${PID}/status`, { token })));
+  assert.equal(statuses.filter((r) => r.status === 200).length, 1);
+});
+
+test('JSON shape, UTF8 bytes and unknown subpaths are bounded', async () => {
+  const { call } = setup();
+  assert.equal((await call('POST', `/v1/p/${PID}/register`, { body: null })).status, 400);
+  assert.equal((await call('POST', `/v1/p/${PID}/register`, { body: [] })).status, 400);
+  assert.equal((await call('POST', `/v1/p/${PID}/register`, { body: { token: OWNER } })).status, 201);
+  assert.equal((await call('POST', `/v1/p/${PID}/invites/extra`, { token: OWNER, body: { role: 'ADMIN' } })).status, 404);
+  assert.equal((await call('PUT', `/v1/p/${PID}/status/extra`, { token: OWNER, body: {} })).status, 404);
+  assert.equal((await call('PUT', `/v1/p/${PID}/status`, { token: OWNER, body: { padding: 'م'.repeat(40_000) } })).status, 413);
+});
+
+test('legacy responses never remove trust or age from experimental rows', async () => {
+  const { call } = setup();
+  await call('POST', `/v1/p/${PID}/register`, { body: { token: OWNER } });
+  const t = Date.now();
+  await call('POST', `/v1/p/${PID}/readings`, { token: OWNER, body: { readings: [
+    { t: t - 120000, mgdl: 100, source: 'juggluco' },
+    { t: t - 60000, mgdl: 300, source: 'linx_ble' },
+    { t, mgdl: 200, source: 'juggluco', ageDays: 16 },
+  ] } });
+  assert.deepEqual((await call('GET', `/v1/p/${PID}/readings`, { token: OWNER })).body.readings, [[t - 120000, 100]]);
+  assert.equal((await call('GET', `/v1/p/${PID}/readings?format=full`, { token: OWNER })).body.readings.length, 3);
 });
