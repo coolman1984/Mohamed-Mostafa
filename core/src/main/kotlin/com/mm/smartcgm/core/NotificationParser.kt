@@ -28,7 +28,8 @@ object NotificationParser {
         '٥' to '5', '٦' to '6', '٧' to '7', '٨' to '8', '٩' to '9', '٫' to '.',
     )
 
-    private val MMOL = Regex("""(\d{1,2}[.,]\d)\s*(mmol)?""", RegexOption.IGNORE_CASE)
+    // Not part of a longer number: "2.6.1" (a version) or "12.34" must not read as 2.6 / 12.3 mmol/L.
+    private val MMOL = Regex("""(?<![\d.,])(\d{1,2}[.,]\d)(?![\d]|[.,]\d)\s*(mmol)?""", RegexOption.IGNORE_CASE)
     private val MGDL = Regex("""(?<![\d.,])(\d{2,3})(?![\d.,])""")
 
     /** Returns mg/dL or null. */
@@ -48,5 +49,34 @@ object NotificationParser {
         MGDL.findAll(clean).map { it.groupValues[1].toDouble() }
             .firstOrNull { it in 39.0..500.0 }?.let { return it }
         return null
+    }
+}
+
+/**
+ * Stops a frozen notification from looking like live data. When the official app loses the sensor it often keeps
+ * showing the LAST value (sometimes with "lost"/"ago"). Re-recording that value as new every minute would hide
+ * "signal lost" and could hide a real low. A value is accepted only when its text changed, or when it is identical
+ * for less than [maxSameMs] (a truly flat glucose still updates the arrow/time text in practice).
+ */
+class FrozenNotificationGuard(private val maxSameMs: Long = 20 * MINUTE_MS) {
+    private val firstSeen = HashMap<String, Pair<String, Long>>()
+
+    private val STALE_WORDS = listOf(
+        // Words that only appear when there is NO live value. ("ago" is deliberately absent: live notifications
+        // often say "updated 1 min ago".)
+        "signal lost", "sensor lost", "disconnected", "no signal", "signal loss", "expired", "searching", "not connected",
+        "انقطع", "مفقود", "منتهي",
+    )
+
+    @Synchronized
+    fun accept(pkg: String, text: String, nowMs: Long): Boolean {
+        val lower = text.lowercase()
+        if (STALE_WORDS.any { it in lower }) return false
+        val prev = firstSeen[pkg]
+        if (prev == null || prev.first != text) {
+            firstSeen[pkg] = text to nowMs
+            return true
+        }
+        return nowMs - prev.second < maxSameMs
     }
 }

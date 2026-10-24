@@ -37,6 +37,7 @@ import com.mm.smartcgm.core.FollowerRole
 import com.mm.smartcgm.core.HOUR_MS
 import com.mm.smartcgm.core.InsulinDose
 import com.mm.smartcgm.core.Prediction
+import com.mm.smartcgm.core.SafeLimits
 import com.mm.smartcgm.core.SensorPhase
 import com.mm.smartcgm.core.Trend
 import com.mm.smartcgm.data.AppMode
@@ -60,6 +61,7 @@ fun HomeScreen() {
     val cob = remember(key) { Repo.cob(now) }
     var entry by remember { mutableStateOf<Entry?>(null) }
     var suspectStick by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var badEntry by remember { mutableStateOf<String?>(null) }
     val follower = s.mode == AppMode.FOLLOWER
     val canEdit = !follower || s.followRole == FollowerRole.ADMIN
 
@@ -130,10 +132,17 @@ fun HomeScreen() {
     }
 
     val t = System.currentTimeMillis()
-    fun saveDose(u: Double) = if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "dose", u) }
-        else { Repo.db.addDose(InsulinDose(t, u)); Repo.touch(); null }
-    fun saveCarbs(g: Double) = if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "carbs", g) }
-        else { Repo.db.addCarbs(CarbEntry(t, g)); Repo.touch(); null }
+    // A negative dose would LOWER the insulin-on-board and raise the next suggestion: only sane values are saved.
+    fun saveDose(u: Double) {
+        if (!SafeLimits.validDose(u)) { badEntry = "الجرعة لازم تكون أكبر من صفر ولحد ${SafeLimits.MAX_DOSE_U.toInt()} وحدة."; return }
+        if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "dose", u) }
+        else { Repo.db.addDose(InsulinDose(t, u)); Repo.touch() }
+    }
+    fun saveCarbs(g: Double) {
+        if (!SafeLimits.validCarbs(g)) { badEntry = "الكربوهيدرات لازم تكون أكبر من صفر ولحد ${SafeLimits.MAX_CARBS_G.toInt()} جرام."; return }
+        if (follower) Pipeline.scope.launch { CloudSync.sendEvent(s, "carbs", g) }
+        else { Repo.db.addCarbs(CarbEntry(t, g)); Repo.touch() }
+    }
 
     when (entry) {
         // The meter value is typed in the display unit and stored in mg/dL (otherwise 6.5 mmol/L would be saved as 6.5 mg/dL).
@@ -150,6 +159,10 @@ fun HomeScreen() {
         Entry.CARBS -> NumberDialog("🍞 كربوهيدرات", "جرام", { entry = null }) { saveCarbs(it) }
         Entry.BOLUS -> BolusDialog { entry = null }
         null -> Unit
+    }
+    badEntry?.let { msg ->
+        AlertDialog(onDismissRequest = { badEntry = null }, title = { Text("⚠️ الرقم مش مظبوط") }, text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { badEntry = null }) { Text("حاضر") } })
     }
     suspectStick?.let { (sensorMg, meterMg) ->
         StickWarningDialog(sensorMg, meterMg, onSave = { Repo.addStick(Fingerstick(t, meterMg)); suspectStick = null },
@@ -173,7 +186,10 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
     val iob = Repo.iob(now)
     val predictedLow = Prediction.forecast(eligible, s.alerts.low.thresholdMgdl)?.minutesToLow != null
     var carbs by remember { mutableStateOf(if (initialCarbs > 0) "%.0f".format(initialCarbs) else "") }
-    val g = carbs.replace(',', '.').toDoubleOrNull() ?: 0.0
+    val typed = carbs.replace(',', '.').replace('٫', '.').toDoubleOrNull()
+    // Out-of-range carbs (typo "600", negative, NaN) give no dose instead of a capped big one.
+    val carbsOk = typed == null || typed == 0.0 || SafeLimits.validCarbs(typed)
+    val g = if (carbsOk) typed ?: 0.0 else 0.0
     val sug = BolusAdvisor.suggest(g, currentMgdl, iob, s.therapy, predictedLow)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -185,6 +201,7 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
                 Text("📉 جرعة التصحيح: %.1f".format(sug.correctionUnits))
                 Text("💉 ناقص الأنسولين الفعال: %.1f".format(sug.iobUnits))
                 Text("✅ المقترح: %.1f وحدة".format(sug.totalUnits), fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                if (!carbsOk) Text("⚠️ الكربوهيدرات لازم تكون من 1 لـ ${SafeLimits.MAX_CARBS_G.toInt()} جرام.", color = Red)
                 sug.warnings.forEach { Text("⚠️ $it", color = Red) }
                 Text("ℹ️ اقتراح حسابي بس — القرار النهائي ليك وللدكتور.", style = MaterialTheme.typography.bodySmall)
             }
@@ -195,6 +212,7 @@ fun BolusDialog(initialCarbs: Double = 0.0, onDismiss: () -> Unit) {
                 val t = System.currentTimeMillis()
                 val confirmed = Repo.dosingReadings(t)
                 if (confirmed.isEmpty()) { onDismiss(); return@TextButton }
+                if (!carbsOk) return@TextButton
                 val checked = BolusAdvisor.suggest(g, confirmed.last().mgdl, Repo.iob(t), Repo.settings.value.therapy,
                     Prediction.forecast(confirmed, Repo.settings.value.alerts.low.thresholdMgdl)?.minutesToLow != null)
                 if (checked.totalUnits != sug.totalUnits || checked.blockedForLow != sug.blockedForLow) {

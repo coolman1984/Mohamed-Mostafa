@@ -38,6 +38,13 @@ object BolusAdvisor {
         predictedLow: Boolean = false,
     ): BolusSuggestion {
         val warnings = mutableListOf<String>()
+        // Corrupt settings or inputs (0, negative, NaN) would turn into an infinite or negative dose: refuse instead.
+        val bad = !(settings.icr > 0) || !(settings.isf > 0) || !(settings.maxBolusUnits > 0) ||
+            !carbsGrams.isFinite() || !iobUnits.isFinite() || (currentMgdl != null && !currentMgdl.isFinite())
+        if (bad) {
+            warnings += "إعدادات أو أرقام غير صالحة: راجع ICR و ISF وأقصى جرعة في الإعدادات."
+            return BolusSuggestion(0.0, 0.0, iobUnits, 0.0, false, false, true, warnings)
+        }
         val meal = max(0.0, carbsGrams) / settings.icr
 
         if (currentMgdl != null && (currentMgdl < settings.lowMgdl || predictedLow)) {

@@ -10,6 +10,7 @@ import com.mm.smartcgm.core.DAY_MS
 import com.mm.smartcgm.core.GlucoseReading
 import com.mm.smartcgm.core.HOUR_MS
 import com.mm.smartcgm.core.InsulinMath
+import com.mm.smartcgm.core.SafeLimits
 import com.mm.smartcgm.core.SensorLife
 import com.mm.smartcgm.core.SensorStatus
 import com.mm.smartcgm.engine.Pipeline
@@ -35,11 +36,17 @@ object Repo {
         app = ctx.applicationContext
         db = Db(app)
         store = SettingsStore(app)
-        _settings.value = store.load()
+        // Clamp on load too, so a bad value saved by an older version can't reach the math.
+        _settings.value = safe(store.load())
     }
 
+    /** Every settings write goes through the safe limits (typos can't reach dosing or switch off urgent low). */
+    private fun safe(s: AppSettings) =
+        s.copy(therapy = SafeLimits.therapy(s.therapy), alerts = SafeLimits.alerts(s.alerts))
+
+    @Synchronized
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
-        val s = transform(_settings.value)
+        val s = safe(transform(_settings.value))
         store.save(s)
         _settings.value = s
         touch()

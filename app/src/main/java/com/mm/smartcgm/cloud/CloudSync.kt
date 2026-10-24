@@ -5,6 +5,7 @@ import com.mm.smartcgm.core.FollowerRole
 import com.mm.smartcgm.core.GlucoseReading
 import com.mm.smartcgm.core.InsulinDose
 import com.mm.smartcgm.core.InsulinKind
+import com.mm.smartcgm.core.SafeLimits
 import com.mm.smartcgm.data.AppSettings
 import com.mm.smartcgm.data.Repo
 import org.json.JSONArray
@@ -161,16 +162,22 @@ object CloudSync {
         if (!enabled(s)) return
         val arr = call("GET", "${base(s)}/events", s.ownerToken)?.optJSONArray("events") ?: return
         if (arr.length() == 0) return
+        val now = System.currentTimeMillis()
+        var added = false
         for (i in 0 until arr.length()) {
             val e = arr.getJSONObject(i)
-            val t = e.optLong("time", System.currentTimeMillis())
+            val id = e.optLong("id", -1)
+            if (id < 0) continue
+            // Delete FIRST and import only if the server confirmed it. The old order (import, then delete) re-imported
+            // the same dose every minute whenever the delete failed, which doubled the insulin-on-board.
+            call("DELETE", "${base(s)}/events/$id", s.ownerToken) ?: continue
+            val t = e.optLong("time", now).let { if (it <= 0 || it > now) now else it }
             val v = e.optDouble("value", 0.0)
             when (e.optString("type")) {
-                "dose" -> Repo.db.addDose(InsulinDose(t, v, InsulinKind.RAPID))
-                "carbs" -> Repo.db.addCarbs(CarbEntry(t, v, "من المتابع"))
+                "dose" -> if (SafeLimits.validDose(v)) { Repo.db.addDose(InsulinDose(t, v, InsulinKind.RAPID)); added = true }
+                "carbs" -> if (SafeLimits.validCarbs(v)) { Repo.db.addCarbs(CarbEntry(t, v, "من المتابع")); added = true }
             }
-            call("DELETE", "${base(s)}/events/${e.optLong("id")}", s.ownerToken)
         }
-        Repo.touch()
+        if (added) Repo.touch()
     }
 }

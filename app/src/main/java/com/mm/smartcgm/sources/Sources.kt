@@ -7,6 +7,7 @@ import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.mm.smartcgm.core.GlucoseReading
+import com.mm.smartcgm.core.FrozenNotificationGuard
 import com.mm.smartcgm.core.NotificationParser
 import com.mm.smartcgm.data.AppMode
 import com.mm.smartcgm.data.Repo
@@ -84,9 +85,12 @@ class CgmNotificationListener : NotificationListenerService() {
             ex.getCharSequence(Notification.EXTRA_TEXT),
             ex.getCharSequence(Notification.EXTRA_BIG_TEXT),
         ).joinToString(" ")
+        if (!guard.accept(sbn.packageName, text, sbn.postTime)) return
         val mgdl = NotificationParser.parse(text) ?: return
         ingestAsync(GlucoseReading(sbn.postTime, mgdl, "app:" + sbn.packageName))
     }
+
+    companion object { private val guard = FrozenNotificationGuard() }
 }
 
 /** Nightscout-compatible endpoint that Juggluco serves when "Web server" is on in its settings. */

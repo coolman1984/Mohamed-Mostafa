@@ -64,7 +64,10 @@ object Pipeline {
         val (alerts, next) = AlertEngine.evaluate(ClinicalGate.forAlarm(recent, now, s.alerts.staleMinutes * 60_000L), forecast, Repo.sensorStatus(now),
             s.alerts.copy(unit = s.unit), alertState, now)
         alertState = next
-        alerts.forEach { Alarms.show(ctx, it) }
+        // Before the very first reading ever (fresh install, setup not finished) "signal lost" every 30 min is
+        // just noise that teaches people to ignore alarms. Once any reading exists it works normally.
+        val neverHadData = Repo.db.lastReadingTime() == null
+        alerts.filterNot { neverHadData && it.type == AlertType.SIGNAL_LOST }.forEach { Alarms.show(ctx, it) }
     }
 
     @Synchronized

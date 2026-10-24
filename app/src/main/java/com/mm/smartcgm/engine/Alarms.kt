@@ -25,6 +25,7 @@ object Alarms {
     const val CH_SERVICE = "service_v1"
     const val SERVICE_ID = 1
 
+    // Touched from the engine thread (start) and the UI/receivers (stop): guarded by @Synchronized below.
     private var player: MediaPlayer? = null
 
     fun createChannels(ctx: Context) {
@@ -93,6 +94,7 @@ object Alarms {
      * Alarm stream plays even when the ringer is on silent. It LOOPS until the user acknowledges it
      * (notification action, swipe, snooze, or opening the app), as AGENTS.md P1-2 requires.
      */
+    @Synchronized
     private fun playCritical(ctx: Context) {
         if (runCatching { player?.isPlaying == true }.getOrDefault(false)) return // already ringing
         runCatching {
@@ -114,6 +116,7 @@ object Alarms {
 
     private var vibrator: Vibrator? = null
 
+    @Synchronized
     fun stopSound() {
         runCatching { player?.stop(); player?.release() }; player = null
         runCatching { vibrator?.cancel() }; vibrator = null
